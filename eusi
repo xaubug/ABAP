@@ -1,0 +1,4169 @@
+*&---------------------------------------------------------------------*
+*& Report  ZGFT_IUSI_OS_NMA                                            *
+*&---------------------------------------------------------------------*
+* 15.05.2019 mvprokofyev 7700068784 ЕУСИ - 769
+* Исправление логики выборок
+*----------------------------------------------------------------------*
+REPORT zgft_eusi_os_nma.
+TABLES: zsgft_eusi, anek, anlc, anlu, sscrfields.
+INCLUDE <icon>.
+TYPES: BEGIN OF ty_map
+    , col(4)
+    , value TYPE  zscmn_alsmex_tabline-value
+    , text TYPE  zscmn_alsmex_tabline-value
+    , col_old(4)
+    , END OF ty_map
+    , thy_map TYPE HASHED TABLE OF ty_map WITH UNIQUE KEY col
+    .
+TYPES: BEGIN OF ty_hmap
+      , col(4)
+      , value TYPE  zscmn_alsmex_tabline-value
+      , END OF ty_hmap
+      .
+TYPES: th_hmap TYPE HASHED TABLE OF ty_hmap WITH UNIQUE KEY col.
+*---------------------------------------------------------------------*
+*       CLASS lcl_event_handler DEFINITION
+*---------------------------------------------------------------------*
+CLASS lcl_event_handler DEFINITION .
+  PUBLIC SECTION .
+    METHODS: h_toolbar FOR EVENT toolbar OF cl_gui_alv_grid
+             IMPORTING e_object e_interactive
+           , h_dclick FOR EVENT double_click OF cl_gui_alv_grid
+             IMPORTING e_row e_column
+           , h_ucom FOR EVENT user_command OF cl_gui_alv_grid
+             IMPORTING e_ucomm .
+ENDCLASS.                    "lcl_event_handler DEFINITION
+*---------------------------------------------------------------------*
+*       CLASS lcl_event_handler IMPLEMENTATION
+*---------------------------------------------------------------------*
+CLASS lcl_event_handler IMPLEMENTATION .
+  METHOD h_toolbar.
+    PERFORM h_toolbar USING e_object  .
+  ENDMETHOD .                    "h_toolbar
+  METHOD h_dclick .
+    PERFORM h_dclick USING e_row e_column .
+  ENDMETHOD .                    "h_dclick
+  METHOD h_ucom .
+    PERFORM h_ucom USING e_ucomm .
+  ENDMETHOD.                    "h_ucom
+ENDCLASS.                    "lcl_event_handler IMPLEMENTATION
+
+CONSTANTS: c_bu TYPE t093-afaber VALUE 01
+         , c_nu TYPE t093-afaber VALUE 10
+         , c_eko TYPE t093-afaber VALUE 13
+         , c_msfo TYPE t093-afaber VALUE 31
+         , c_sbu(4) VALUE 'РСБУ'
+         , c_snu(2) VALUE 'НУ'
+         , c_seko(4) VALUE 'ОцОб'
+         , c_smsfo(4) VALUE  'МСФО'
+         , c_afapl TYPE t093-afapl VALUE 'GTNK'
+         , c_entire_y TYPE i VALUE 12
+         , c_eusi(4) VALUE 'ЕУСИ'
+         , c_sap(3) VALUE 'SAP'
+         .
+*->ALV Section
+DATA: gv_ok100 LIKE sy-ucomm
+    , gv_cont100 TYPE scrfname VALUE 'ALV100'
+    , gr_grid100 TYPE REF TO cl_gui_alv_grid
+    , gr_cont100 TYPE REF TO cl_gui_custom_container
+    , gt_fcat100 TYPE lvc_t_fcat
+    , gs_layout100 TYPE lvc_s_layo
+    , gr_eh100 TYPE REF TO lcl_event_handler
+    , gs_variant   TYPE disvariant
+    .
+*-<ALV Section
+DATA: gt_out TYPE STANDARD TABLE OF zsgft_eusi
+    , gt_out_dv TYPE STANDARD TABLE OF zsgft_eusi_dv
+    , gt_out_cn TYPE STANDARD TABLE OF zsgft_eusi_cn
+    , gt_out_cn_all TYPE STANDARD TABLE OF zsgft_eusi_cn
+    , gt_rek TYPE STANDARD TABLE OF zgft_eusi_rek_upl
+    , gt_doo TYPE STANDARD TABLE OF zgft_eusi_rek
+    , gt_nma TYPE STANDARD TABLE OF zgft_eusi_rek_nma
+    , gt_93 TYPE STANDARD TABLE OF t093-afaber
+    , gt_afab_ok TYPE HASHED TABLE OF t093-afaber WITH UNIQUE KEY table_line
+    , gf_ok
+    , gr_bdatu TYPE RANGE OF anlz-bdatu
+    , gs_bdatu LIKE LINE OF gr_bdatu
+    , gv_butxt TYPE t001-butxt
+    , gv_land TYPE t001-land1
+    , gv_repdate TYPE sy-datum
+    , gv_startdate TYPE sy-datum
+    , gf_1 TYPE flag
+    , gf_2 TYPE flag
+    , gf_3 TYPE flag
+    , gt_map TYPE thy_map
+    , gv_cnt TYPE i
+    , gf_rc
+    , gv_max_rows TYPE ztcmn_cnstgrpps-value
+    .
+
+DATA: go_excel TYPE ole2_object
+    , go_wlist TYPE ole2_object
+    , go_fcell TYPE ole2_object
+    , go_lcell TYPE ole2_object
+    , go_range TYPE ole2_object
+    , go_scell TYPE ole2_object
+    .
+
+DEFINE afab_auth.
+  read table gt_afab_ok with table key table_line = &1 transporting no fields.
+END-OF-DEFINITION.
+
+FIELD-SYMBOLS: <gt_out> TYPE STANDARD TABLE
+             , <gt_exc> TYPE STANDARD TABLE
+             .
+
+SELECTION-SCREEN: BEGIN OF BLOCK osn WITH FRAME.
+PARAMETERS: p_bukrs LIKE anla-bukrs OBLIGATORY.
+SELECT-OPTIONS: so_eusi FOR zsgft_eusi-zeusi
+              , so_nzay FOR anlu-nzayav_eusi
+              , so_gsber FOR zsgft_eusi-gsber
+              , so_anlkl FOR zsgft_eusi-anlkl
+              , so_anln1 FOR zsgft_eusi-anln1
+              , so_anln2 FOR zsgft_eusi-anln2
+              , so_afabe FOR anlc-afabe." OBLIGATORY
+.
+SELECTION-SCREEN: END OF BLOCK osn.
+
+SELECTION-SCREEN: BEGIN OF BLOCK dat WITH FRAME TITLE text-b01.
+PARAMETERS: p_gjahr LIKE anek-gjahr." OBLIGATORY.
+SELECT-OPTIONS: so_from FOR anek-monat NO-EXTENSION." OBLIGATORY.
+SELECTION-SCREEN: END OF BLOCK dat.
+
+SELECTION-SCREEN: BEGIN OF BLOCK vyg WITH FRAME TITLE text-b02
+                , BEGIN OF LINE
+                .
+PARAMETERS: ch_osn RADIOBUTTON GROUP rtyp DEFAULT 'X' USER-COMMAND vyg.
+
+SELECTION-SCREEN: COMMENT 3(34) text-p01 FOR FIELD ch_osn
+                , PUSHBUTTON 38(37) but1 USER-COMMAND pb01
+                , END OF LINE.
+
+SELECTION-SCREEN:BEGIN OF LINE.
+PARAMETERS: ch_dvi RADIOBUTTON GROUP rtyp.
+SELECTION-SCREEN: COMMENT 3(34) text-p02 FOR FIELD ch_dvi
+                , PUSHBUTTON 38(37) but2 USER-COMMAND pb02
+                , END OF LINE.
+PARAMETERS: p_excl AS CHECKBOX MODIF ID exc.
+SELECTION-SCREEN:BEGIN OF LINE.
+PARAMETERS: ch_con  RADIOBUTTON GROUP rtyp .
+SELECTION-SCREEN: COMMENT 3(34) text-p03 FOR FIELD ch_con
+                , END OF LINE.
+
+SELECTION-SCREEN:BEGIN OF LINE.
+PARAMETERS: ch_rek  RADIOBUTTON GROUP rtyp.
+SELECTION-SCREEN: COMMENT 3(34) text-p04 FOR FIELD ch_rek
+                , END OF LINE.
+
+SELECTION-SCREEN:BEGIN OF LINE.
+PARAMETERS: ch_doo  RADIOBUTTON GROUP rtyp .
+SELECTION-SCREEN: COMMENT 3(49) text-p05 FOR FIELD ch_doo
+                , END OF LINE.
+
+SELECTION-SCREEN:BEGIN OF LINE.
+PARAMETERS: ch_nma  RADIOBUTTON GROUP rtyp .
+SELECTION-SCREEN: COMMENT 3(57) text-p07 FOR FIELD ch_nma
+                , END OF LINE.
+
+
+PARAMETERS: p_file TYPE rlgrap-filename MODIF ID fln.
+SELECTION-SCREEN: END OF BLOCK vyg.
+
+INITIALIZATION.
+  zcl_cmn_cg=>value(
+     EXPORTING
+       prj    = 'GFT'
+       cg     = 'IID-769'
+       pos    = 1
+     RECEIVING
+       return = gv_max_rows ).
+  REFRESH gt_93.
+  SELECT afaber FROM t093 INTO TABLE gt_93
+  WHERE afapl = c_afapl.
+
+  PERFORM icon_create USING icon_export
+                            text-bt1
+                   CHANGING but1.
+
+  PERFORM icon_create USING icon_export
+                              text-bt2
+                     CHANGING but2.
+
+AT SELECTION-SCREEN ON p_bukrs.
+  AUTHORITY-CHECK OBJECT 'F_BKPF_BUK'
+           ID 'BUKRS' FIELD p_bukrs
+           ID 'ACTVT' FIELD '03'.
+  IF sy-subrc NE 0.
+    MESSAGE text-m01 TYPE 'E'.
+  ENDIF.
+
+AT SELECTION-SCREEN ON p_gjahr.
+  PERFORM check_filled USING p_gjahr.
+
+
+
+AT SELECTION-SCREEN ON so_from.
+  PERFORM check_filled USING so_from.
+
+
+AT SELECTION-SCREEN ON so_afabe.
+  PERFORM dval_read USING 'CH_REK'
+                   CHANGING gf_1.
+  PERFORM dval_read USING 'CH_DOO'
+                   CHANGING gf_2.
+  PERFORM dval_read USING 'CH_NMA'
+                   CHANGING gf_3.
+  IF gf_1 IS INITIAL AND gf_2 IS INITIAL AND gf_3 IS INITIAL.
+    PERFORM check_filled USING so_afabe.
+  ENDIF.
+
+AT SELECTION-SCREEN.
+  PERFORM afab_auth.
+  CASE sscrfields-ucomm.
+    WHEN 'PB01'.
+      PERFORM init_dates.
+      PERFORM inform_afab CHANGING gf_ok.
+      IF gf_ok = 1.
+        PERFORM select_osn.
+        IF <gt_out> IS INITIAL.
+          MESSAGE text-m02 TYPE 'S' DISPLAY LIKE 'E'.
+        ELSE.
+          PERFORM export_to_excel.
+        ENDIF.
+      ENDIF.
+    WHEN 'PB02'.
+      PERFORM init_dates.
+      PERFORM inform_afab CHANGING gf_ok.
+      IF gf_ok = 1.
+        PERFORM select_dvi.
+        IF <gt_out> IS INITIAL.
+          MESSAGE text-m02 TYPE 'S' DISPLAY LIKE 'E'.
+        ELSE.
+          PERFORM export_to_excel.
+        ENDIF.
+      ENDIF.
+    WHEN 'VYG'.
+      IF ch_dvi IS INITIAL.
+        CLEAR p_excl.
+      ENDIF.
+      IF ch_rek IS INITIAL AND ch_doo IS INITIAL AND ch_nma IS INITIAL.
+        CLEAR p_file.
+      ENDIF.
+  ENDCASE.
+
+AT SELECTION-SCREEN OUTPUT.
+  LOOP AT SCREEN.
+*    IF screen-name = 'CH_REK' OR  screen-name = 'CH_DOO' OR  screen-name = 'CH_NMA'.
+    IF screen-name = 'CH_DOO' OR  screen-name = 'CH_NMA'.
+      screen-input = 0.
+      screen-active = 0.
+      MODIFY SCREEN.
+    ENDIF.
+    IF screen-group1 = 'EXC'.
+      IF ch_dvi IS INITIAL.
+        screen-active = 0.
+        MODIFY SCREEN.
+      ELSE.
+        screen-active = 1.
+        MODIFY SCREEN.
+      ENDIF.
+    ELSEIF screen-group1 = 'FLN'.
+      IF ch_rek IS NOT INITIAL OR ch_doo IS NOT INITIAL OR ch_nma IS NOT INITIAL.
+        screen-active = 1.
+        MODIFY SCREEN.
+      ELSE.
+        screen-active = 0.
+        MODIFY SCREEN.
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR p_file.
+  PERFORM set_file CHANGING p_file .
+
+START-OF-SELECTION.
+  PERFORM init_dates.
+  PERFORM init_screen_globals.
+  PERFORM inform_afab CHANGING gf_ok.
+  IF gf_ok = 1.
+    CASE abap_true.
+      WHEN ch_osn.
+        PERFORM select_osn.
+      WHEN ch_dvi.
+        PERFORM select_dvi.
+      WHEN ch_con.
+        PERFORM select_con.
+      WHEN ch_rek.
+        PERFORM check_file_exists CHANGING p_file.
+        MESSAGE 'Записи с несоответствующей БЕ и с неуказанными ОС будут игнорированы' TYPE 'I'.
+        PERFORM upload.
+        PERFORM process_rek.
+      WHEN ch_doo.
+        PERFORM check_file_exists CHANGING p_file.
+        MESSAGE 'Записи с несоответствующей БЕ будут игнорированы' TYPE 'I'.
+        PERFORM upload.
+        PERFORM process_doo.
+      WHEN ch_nma.
+        PERFORM check_file_exists CHANGING p_file.
+        MESSAGE 'Записи с несоответствующей БЕ и с неуказанными ОС будут игнорированы' TYPE 'I'.
+        PERFORM upload_nma CHANGING gt_map.
+        PERFORM process_nma USING gt_map.
+    ENDCASE.
+    CHECK <gt_out> IS ASSIGNED.
+    IF <gt_out>[] IS INITIAL.
+      MESSAGE text-m02 TYPE 'S' DISPLAY LIKE 'E'.
+    ELSE.
+      gv_cnt = LINES( <gt_out> ).
+      IF gv_cnt > gv_max_rows.
+        PERFORM confirm USING 'Количество записей превышает допустимое. Данные будут выгружены в файл. Продолжить?'
+                        CHANGING gf_rc.
+        CASE gf_rc.
+          WHEN 1.
+            PERFORM export_to_excel.
+          WHEN 2.
+            MESSAGE 'Действие отменено!' TYPE 'S'.
+          WHEN OTHERS.
+        ENDCASE.
+      ELSE.
+        CALL SCREEN 100.
+      ENDIF.
+    ENDIF.
+  ENDIF.
+*&---------------------------------------------------------------------*
+*&      Form  icon_create
+*&---------------------------------------------------------------------*
+FORM icon_create USING p_icon TYPE icon-id
+                       p_info TYPE char30
+              CHANGING p_but TYPE any.
+  CALL FUNCTION 'ICON_CREATE'
+    EXPORTING
+      name                  = p_icon
+      info                  = p_info
+    IMPORTING
+      RESULT                = p_but
+    EXCEPTIONS
+      icon_not_found        = 1
+      outputfield_too_short = 2
+      OTHERS                = 3.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+ENDFORM.                    " ICON_CREATE
+*&---------------------------------------------------------------------*
+*&      Form  select_osn
+*&---------------------------------------------------------------------*
+FORM select_osn .
+  CONSTANTS: c_old TYPE zsgft_eusi-xafabch_txt VALUE 'Куплено б/у'
+           , c_new TYPE zsgft_eusi-xafabch_txt VALUE 'Куплено новое ОС'
+           .
+  TYPES: BEGIN OF ty_out .
+  INCLUDE TYPE zsgft_eusi .
+  TYPES: xafabch LIKE anla-xafabch
+       , gdlgrp LIKE anla-gdlgrp
+       , anka_type LIKE j_3rfanka-anka_type
+       , txt50 LIKE anla-txt50
+       , txa50 LIKE anla-txa50
+       , zzoilwell LIKE anlu-zzoilwell
+       , okof LIKE anlu-okof
+       , aedat LIKE anla-aedat
+       , erdat LIKE anla-erdat
+       , fiamt LIKE anla-fiamt
+       , ktogr LIKE t095-ktogr
+       .
+  TYPES: END OF ty_out .
+  TYPES: BEGIN OF ty_j_3rfproptaxv
+         , bukrs TYPE j_3rfproptaxv-bukrs
+         , anln1 TYPE j_3rfproptaxv-anln1
+         , anln2 TYPE j_3rfproptaxv-anln2
+         , bdatu TYPE j_3rfproptaxv-bdatu
+         , adatu TYPE j_3rfproptaxv-adatu
+         , okato1 TYPE j_3rfproptaxv-okato1
+         , okato2 TYPE j_3rfproptaxv-okato2
+         , okato3 TYPE j_3rfproptaxv-okato3
+         , okato4 TYPE j_3rfproptaxv-okato4
+         , privilege TYPE j_3rfproptaxv-privilege
+         , exemption TYPE j_3rfproptaxv-exemption
+         , descript TYPE j_3rfokatot-descript
+         , END OF ty_j_3rfproptaxv.
+
+  TYPES : BEGIN OF ty_subrf
+        , bukrs TYPE j_3rfproptaxv-bukrs
+        , anln1 TYPE j_3rfproptaxv-anln1
+        , anln2 TYPE j_3rfproptaxv-anln2
+        , bdatu TYPE j_3rfproptaxv-bdatu
+        , adatu TYPE j_3rfproptaxv-adatu
+        , okato1 TYPE j_3rfproptaxv-okato1
+        , descript TYPE j_3rfokatot-descript
+        , END OF ty_subrf.
+
+  TYPES: BEGIN OF ty_gorpunkt
+       , bukrs TYPE j_3rfproptaxv-bukrs
+       , anln1 TYPE j_3rfproptaxv-anln1
+       , anln2 TYPE j_3rfproptaxv-anln2
+       , bdatu TYPE j_3rfproptaxv-bdatu
+       , adatu TYPE j_3rfproptaxv-adatu
+       , okato1 TYPE j_3rfproptaxv-okato1
+       , okato2 TYPE j_3rfproptaxv-okato2
+       , descript TYPE j_3rfokatot-descript
+       , END OF ty_gorpunkt.
+
+  TYPES: BEGIN OF ty_anlz
+        , bukrs TYPE anlz-bukrs
+        , anln1 TYPE anlz-anln1
+        , anln2 TYPE anlz-anln2
+        , bdatu TYPE anlz-bdatu
+        , gsber TYPE anlz-gsber
+        , pernr TYPE pa0002-pernr
+        , stort TYPE anlz-stort
+        , msfak TYPE anlz-msfak
+        , ktext TYPE t499s-ktext
+        , END OF ty_anlz.
+  TYPES: BEGIN OF ty_anlb
+       , anln1 LIKE anlb-anln1
+       , anln2 LIKE anlb-anln2
+       , afabe LIKE anlb-afabe
+       , bdatu LIKE anlb-bdatu
+       , ndjar LIKE anlb-ndjar
+       , ndper LIKE anlb-ndper
+       , afasl LIKE anlb-afasl
+       , afabg LIKE anlb-afabg
+       , afatxt LIKE t090nat-afatxt
+       , END OF ty_anlb
+       .
+
+  TYPES: BEGIN OF ty_anep
+       , anln1 LIKE anep-anln1
+       , anln2 LIKE anep-anln2
+       , bwasl LIKE anep-bwasl
+       , bwatxt LIKE tabwt-bwatxt
+       , END OF ty_anep
+       .
+
+  TYPES: BEGIN OF ty_anlc
+       , anln1 LIKE anlc-anln1
+       , anln2 LIKE anlc-anln2
+       , afabe LIKE anlc-afabe
+       , ndabj LIKE anlc-ndabj
+       , ndabp LIKE anlc-ndabp
+       , END OF ty_anlc
+       .
+  TYPES: BEGIN OF ty_okofkey
+       , okof TYPE j_3rftokof-okof
+       , zzokof_2014 TYPE j_3rftokof-zzokof_2014
+       , okof_dop TYPE j_3rftokof-okof_dop
+       , END OF ty_okofkey
+       .
+  TYPES: BEGIN OF ty_okof.
+  INCLUDE TYPE ty_okofkey.
+  TYPES zzseparable TYPE j_3rftokof-zzseparable.
+  TYPES: END OF ty_okof
+       .
+  TYPES: BEGIN OF ty_rkey
+       , region TYPE j_3rfproptaxr-region
+       , privilege TYPE j_3rfproptaxr-privilege
+       , END OF  ty_rkey
+       .
+  TYPES: BEGIN OF ty_t095
+       , ktogr LIKE t095-ktogr
+       , ktansw LIKE t095-ktansw
+       , END OF ty_t095
+       .
+  TYPES: BEGIN OF ty_v_anepk
+       , anln1 TYPE v_anepk-anln1
+       , anln2 TYPE v_anepk-anln2
+       , lnran TYPE v_anepk-lnran
+       , budat TYPE v_anepk-budat
+       , END OF ty_v_anepk
+       .
+  TYPES: BEGIN OF ty_meth_amort
+       , mcode TYPE ztgft_meth_amort-afasl
+       , rsbu TYPE ztgft_meth_amort-rsbu
+       , msfo TYPE ztgft_meth_amort-msfo
+       , nu TYPE ztgft_meth_amort-nu
+       , m_amort_eusi TYPE ztgft_meth_amort-m_amort_eusi
+       , END OF ty_meth_amort
+       .
+  DATA: lt_conserv LIKE STANDARD TABLE OF ztgft_conserv
+      , ls_conserv LIKE LINE OF lt_conserv
+      , lt_screwt LIKE HASHED TABLE OF ztgft_aa_screwt WITH UNIQUE KEY zzkust zzscrew
+      , ls_screwt LIKE LINE OF lt_screwt
+      , lt_cadastr TYPE STANDARD TABLE OF ztgft_cadastr
+      , ls_cadastr LIKE LINE OF lt_cadastr
+      , lt_out TYPE STANDARD TABLE OF ty_out
+      , ls_out LIKE LINE OF lt_out
+      , ls_gout LIKE LINE OF gt_out
+      , lv_a_sum  TYPE tslvt
+      , lv_o_sum  TYPE tslvt
+      , lv_dd_sum TYPE tslvt
+      , lv_tt_sum TYPE tslvt
+      , lt_j_3rfproptaxv TYPE STANDARD TABLE OF ty_j_3rfproptaxv
+      , ls_j_3rfproptaxv LIKE LINE OF lt_j_3rfproptaxv
+      , lt_anlz TYPE STANDARD TABLE OF ty_anlz
+      , ls_anlz LIKE LINE OF lt_anlz
+      , lt_pernr_key TYPE STANDARD TABLE OF pa0002-pernr
+      , lt_pa0002 TYPE STANDARD TABLE OF pa0002
+      , ls_pa0002 LIKE LINE OF lt_pa0002
+      , lt_anlb TYPE STANDARD TABLE OF ty_anlb
+      , ls_anlb LIKE LINE OF lt_anlb
+      , lt_j_3rtasset TYPE STANDARD TABLE OF j_3rtasset
+      , ls_j_3rtasset LIKE LINE OF lt_j_3rtasset
+      , lt_anep TYPE STANDARD TABLE OF ty_anep
+      , ls_anep LIKE LINE OF lt_anep
+      , lt_anlc TYPE STANDARD TABLE OF ty_anlc
+      , ls_anlc LIKE LINE OF lt_anlc
+      , lv_tabix TYPE sy-tabix
+      , lt_okof_key TYPE STANDARD TABLE OF ty_okofkey
+      , ls_okof_key LIKE LINE OF lt_okof_key
+      , lt_okof TYPE STANDARD TABLE OF ty_okof
+      , ls_okof LIKE LINE OF lt_okof
+      , lv_todat TYPE sy-datum
+      , lt_rkey TYPE SORTED TABLE OF ty_rkey WITH UNIQUE KEY region privilege
+      , ls_rkey LIKE LINE OF lt_rkey
+      , lt_j_3rfproptaxr TYPE STANDARD TABLE OF j_3rfproptaxr
+      , ls_j_3rfproptaxr LIKE LINE OF lt_j_3rfproptaxr
+      , lt_t095 TYPE HASHED TABLE OF ty_t095 WITH UNIQUE KEY ktogr
+      , ls_t095 LIKE LINE OF lt_t095
+      , lt_t006a TYPE SORTED TABLE OF t006a WITH UNIQUE KEY msehi
+      , ls_t006a LIKE LINE OF lt_t006a
+      , lv_first_day TYPE d
+      , lt_v_anepk TYPE STANDARD TABLE OF ty_v_anepk
+      , ls_v_anepk LIKE LINE OF lt_v_anepk
+      , lt_meth_amort TYPE SORTED TABLE OF ty_meth_amort WITH UNIQUE KEY mcode
+      , ls_meth_amort LIKE LINE OF lt_meth_amort
+      .
+
+  DEFINE read_anlc.
+    clear ls_anlc.
+    read table lt_anlc into ls_anlc with key anln1 = ls_out-anln1
+                                             anln2 = ls_out-anln2
+                                             afabe = ls_anlb-afabe binary search.
+  END-OF-DEFINITION.
+
+  PERFORM refresh_all.
+  CONCATENATE p_gjahr '0101' INTO lv_first_day.
+
+  IF gs_bdatu-high IS INITIAL.
+    lv_todat = gs_bdatu-low.
+  ELSE.
+    lv_todat = gs_bdatu-high.
+  ENDIF.
+
+  SELECT u~zeusi
+         a~bukrs
+         a~anln1
+         a~invnr
+         a~anln2
+         a~xafabch
+         a~txt50
+         a~txa50
+         a~anlkl
+         a~zugdt
+         a~gdlgrp
+         a~posnr
+         a~ord41
+         a~lvtnr
+         a~lvdat
+         a~leafi
+         a~aktiv AS aktiv_exp
+*         a~aktiv AS aktiv_opr
+         a~deakt
+         a~aedat
+         a~erdat
+         a~aktiv AS aktiv_msfo
+         a~fiamt
+         a~ktogr
+         ts~gdlgrp_txt
+         ts~gdlgrp_korp
+         nk~anka_type
+         kt~txk50
+         u~zzgroupname
+         u~zzoilwell
+         u~zzshareregnum
+         u~zzsharedate
+         u~okofdop
+         u~zzokof_2014
+         u~proptype
+         u~okof
+         u~zzautomodel
+         u~nzayav_eusi
+         u~pzayav_eusi
+         u~zzarea_id AS lic_uch
+         l~konzs AS lifnr
+         l2~konzs AS cod_sdp
+         c~baujj
+         c~fleet_vin
+         c~zzenvircl
+         c~ctypv
+         FROM anla AS a
+         LEFT JOIN anlu AS u ON
+             a~anln1 = u~anln1
+         AND a~anln2 = u~anln2
+         AND a~bukrs = u~bukrs
+         LEFT JOIN j_3rfanka AS nk ON
+            nk~anlkl = a~anlkl
+         LEFT JOIN ankt AS kt ON
+             kt~anlkl = a~anlkl
+         AND kt~spras = sy-langu
+         LEFT JOIN t087s AS ts ON
+             ts~gdlgrp = a~gdlgrp
+         AND ts~spras = sy-langu
+         LEFT JOIN  lfa1 AS l ON
+          a~lifnr = l~lifnr
+         LEFT JOIN  lfa1 AS l2 ON
+          a~leafi = l2~lifnr
+         LEFT JOIN j_3rtvehicl AS c ON
+             a~anln1 = c~anln1
+         AND a~anln2 = c~anln2
+         AND a~bukrs = c~bukrs
+        INTO CORRESPONDING FIELDS OF TABLE lt_out
+         WHERE a~bukrs EQ p_bukrs
+         AND   a~anlkl IN so_anlkl
+         AND   a~anln1 IN so_anln1
+         AND   a~anln2 IN so_anln2
+         AND   ( a~zugdt LE lv_todat AND a~zugdt NE '00000000')
+         AND ( a~deakt = '00000000' OR a~deakt BETWEEN lv_first_day AND '99991231' ).
+  DELETE lt_out WHERE NOT ( zeusi IN so_eusi AND nzayav_eusi IN so_nzay ).
+
+  IF NOT lt_out IS INITIAL.
+    SELECT ktogr ktansw
+      FROM t095
+      INTO TABLE lt_t095
+      FOR ALL ENTRIES IN lt_out
+      WHERE ktogr = lt_out-ktogr
+      AND ktopl = c_afapl
+      AND afabe = c_bu.
+
+    SELECT * FROM ztgft_conserv
+      INTO TABLE lt_conserv
+      FOR ALL ENTRIES IN lt_out
+      WHERE bukrs EQ lt_out-bukrs
+      AND anln1 EQ lt_out-anln1
+      AND anln2 EQ lt_out-anln2
+      AND invnr EQ lt_out-invnr.
+    SORT lt_conserv BY bukrs anln1 anln2 invnr consdate DESCENDING.
+    DELETE ADJACENT DUPLICATES FROM lt_conserv COMPARING bukrs anln1 anln2 invnr.
+
+    SELECT * FROM ztgft_aa_screwt
+         INTO TABLE lt_screwt
+         FOR ALL ENTRIES IN lt_out
+         WHERE spras EQ sy-langu
+         AND zzkust EQ lt_out-zzgroupname
+         AND zzscrew EQ lt_out-zzoilwell.
+
+    SELECT * FROM ztgft_cadastr
+      INTO TABLE lt_cadastr
+      FOR ALL ENTRIES IN lt_out
+      WHERE bukrs EQ lt_out-bukrs
+      AND anln1 EQ lt_out-anln1
+      AND anln2 EQ lt_out-anln2
+      AND adatu <= gs_bdatu-high AND bdatu >= gs_bdatu-low.
+    SORT lt_cadastr BY bukrs anln1 anln2 bdatu DESCENDING.
+    DELETE ADJACENT DUPLICATES FROM lt_cadastr COMPARING bukrs anln1 anln2 .
+
+    SELECT v~bukrs
+           v~anln1
+           v~anln2
+           v~bdatu
+           v~adatu
+           v~okato1
+           v~okato2
+           v~okato3
+           v~okato4
+           v~privilege
+           v~exemption
+           t~descript
+       FROM j_3rfproptaxv AS v
+     JOIN j_3rfokatot AS t ON
+          t~okato1 = v~okato1
+     AND t~okato2 = v~okato2
+     AND t~okato3 = v~okato3
+     AND t~okato4 = v~okato4
+     AND  t~sprsl = sy-langu
+     INTO TABLE lt_j_3rfproptaxv
+     FOR ALL ENTRIES IN lt_out
+     WHERE v~bukrs EQ lt_out-bukrs
+     AND v~anln1 EQ lt_out-anln1
+     AND v~anln2 EQ lt_out-anln2
+     AND v~adatu <= gs_bdatu-high AND bdatu >= gs_bdatu-low.
+    SORT lt_j_3rfproptaxv BY bukrs anln1 anln2 bdatu DESCENDING.
+    DELETE ADJACENT DUPLICATES FROM lt_j_3rfproptaxv COMPARING bukrs anln1 anln2 .
+
+    LOOP AT lt_j_3rfproptaxv INTO ls_j_3rfproptaxv.
+      ls_rkey-region = ls_j_3rfproptaxv-okato1.
+      ls_rkey-privilege = ls_j_3rfproptaxv-privilege.
+      COLLECT ls_rkey INTO lt_rkey.
+    ENDLOOP.
+    IF NOT lt_rkey IS INITIAL.
+      SELECT * FROM j_3rfproptaxr
+       INTO TABLE lt_j_3rfproptaxr
+       FOR ALL ENTRIES IN lt_rkey
+       WHERE region = lt_rkey-region
+       AND privilege =  lt_rkey-privilege
+       AND (  pyear BETWEEN gs_bdatu-low(4) AND gs_bdatu-high(4)
+               AND pmonth LE gs_bdatu-high+4(2) ).
+      SORT lt_j_3rfproptaxr BY region privilege district DESCENDING pyear DESCENDING pmonth DESCENDING.
+      DELETE ADJACENT DUPLICATES FROM lt_j_3rfproptaxr COMPARING region privilege district pyear pmonth.
+    ENDIF.
+
+    SELECT v~bukrs
+           v~anln1
+           v~anln2
+           v~bdatu
+           v~gsber
+           v~pernr
+           v~stort
+           v~msfak
+           s~ktext
+    FROM anlz AS v
+    LEFT JOIN t499s AS s ON
+         s~werks = v~werks
+    AND  s~stand = v~stort
+    INTO TABLE lt_anlz
+    FOR ALL ENTRIES IN lt_out
+    WHERE v~bukrs EQ lt_out-bukrs
+    AND v~anln1 EQ lt_out-anln1
+    AND v~anln2 EQ lt_out-anln2
+    AND bdatu >= gs_bdatu-high
+    AND gsber IN so_gsber  .
+    SORT lt_anlz BY bukrs anln1 anln2 bdatu DESCENDING.
+    DELETE ADJACENT DUPLICATES FROM lt_anlz COMPARING bukrs anln1 anln2 .
+
+    LOOP AT lt_anlz INTO ls_anlz.
+      COLLECT ls_anlz-pernr INTO lt_pernr_key.
+    ENDLOOP.
+    DELETE lt_pernr_key WHERE table_line IS INITIAL.
+
+    IF NOT lt_pernr_key IS INITIAL.
+      SELECT *
+      FROM pa0002
+      INTO TABLE lt_pa0002
+      FOR ALL ENTRIES IN lt_pernr_key
+      WHERE pernr = lt_pernr_key-table_line
+      AND  ( begda <= gs_bdatu-high AND endda >= gs_bdatu-low ).
+      SORT lt_pa0002 BY pernr.
+      DELETE ADJACENT DUPLICATES FROM lt_pa0002 COMPARING pernr.
+    ENDIF.
+
+    SELECT b~anln1
+           b~anln2
+           b~afabe
+           b~bdatu
+           b~ndjar
+           b~ndper
+           b~afasl
+           b~afabg
+           t~afatxt
+         FROM anlb AS b
+         LEFT JOIN t090nat AS t ON
+             t~afasl = b~afasl
+         AND t~afapl = c_afapl
+         AND t~spras = sy-langu
+         INTO TABLE lt_anlb
+         FOR ALL ENTRIES IN lt_out
+         WHERE b~bukrs EQ p_bukrs
+         AND   b~anln1 EQ lt_out-anln1
+         AND   b~anln2 EQ lt_out-anln2
+         AND   b~afabe IN (c_bu, c_nu, c_eko, c_msfo) .
+    SORT lt_anlb BY anln1 anln2 afabe bdatu DESCENDING.
+    DELETE ADJACENT DUPLICATES FROM lt_anlb COMPARING anln1 anln2 afabe.
+    IF NOT lt_anlb IS INITIAL.
+      SELECT afasl AS mcode rsbu msfo nu m_amort_eusi
+        FROM ztgft_meth_amort
+        INTO CORRESPONDING FIELDS OF TABLE lt_meth_amort
+        FOR ALL ENTRIES IN lt_anlb
+        WHERE afasl = lt_anlb-afasl.
+    ENDIF.
+
+    SELECT *
+    FROM j_3rtasset
+    INTO TABLE lt_j_3rtasset
+    FOR ALL ENTRIES IN lt_out
+    WHERE bukrs EQ p_bukrs
+    AND   anln1 EQ lt_out-anln1
+    AND   anln2 EQ lt_out-anln2.
+    IF NOT lt_j_3rtasset IS INITIAL.
+      SORT lt_j_3rtasset BY bukrs anln1 anln2 bdatu DESCENDING.
+      DELETE ADJACENT DUPLICATES FROM lt_j_3rtasset COMPARING bukrs anln1 anln2.
+      SELECT * FROM t006a INTO TABLE lt_t006a
+        FOR ALL ENTRIES IN lt_j_3rtasset
+        WHERE  msehi = lt_j_3rtasset-unitp
+        AND    spras = sy-langu.
+    ENDIF.
+
+    SELECT DISTINCT p~anln1
+                    p~anln2
+                    p~bwasl
+                    z~bwatxt
+        FROM anep AS p
+        JOIN tabw AS w ON
+           w~bwasl = p~bwasl
+        LEFT JOIN tabwt AS t ON
+            t~bwasl = w~bwasl
+        AND t~spras = sy-langu
+        JOIN ztgft_tabwt AS z ON
+         z~bwasl = t~bwasl
+        INTO TABLE lt_anep
+        FOR ALL ENTRIES IN lt_out
+        WHERE p~bukrs EQ p_bukrs
+        AND   p~anln1 EQ lt_out-anln1
+        AND   p~anln2 EQ lt_out-anln2
+        AND   p~gjahr = p_gjahr
+        AND   p~peraf IN so_from
+        AND   p~afabe EQ c_bu
+        AND   w~bwagrp LIKE '2%' .
+    SORT lt_anep BY anln1 anln2 DESCENDING.
+
+    SELECT anln1
+           anln2
+           afabe
+           ndabj
+           ndabp
+    FROM anlc
+    INTO TABLE lt_anlc
+    FOR ALL ENTRIES IN lt_out
+    WHERE bukrs EQ p_bukrs
+    AND   gjahr EQ p_gjahr
+    AND   anln1 EQ lt_out-anln1
+    AND   anln2 EQ lt_out-anln2
+    AND   afabe IN (c_bu, c_nu, c_msfo).
+    SORT lt_anlc BY anln1 anln2 afabe ndabj DESCENDING
+                                      ndabp DESCENDING.
+    DELETE ADJACENT DUPLICATES FROM lt_anlc COMPARING anln1 anln2 afabe .
+
+    SELECT anln1 anln2 lnran budat
+      FROM v_anepk
+      INTO TABLE lt_v_anepk
+      FOR ALL ENTRIES IN lt_out
+      WHERE bukrs EQ p_bukrs
+      AND   anln1 EQ lt_out-anln1
+      AND   anln2 EQ lt_out-anln2
+      AND   afabe EQ c_bu
+      AND   lnsan EQ space.
+    SORT lt_v_anepk BY anln1 anln2 ASCENDING lnran DESCENDING.
+    DELETE ADJACENT DUPLICATES FROM lt_v_anepk COMPARING anln1 anln2.
+
+  ENDIF.
+
+  LOOP AT lt_out INTO ls_out.
+    CHECK NOT ( ls_okof_key-okof IS INITIAL AND ls_okof_key-zzokof_2014 IS INITIAL AND ls_okof_key-okof_dop IS INITIAL ).
+    ls_okof_key-okof = ls_out-okof.
+    ls_okof_key-zzokof_2014 = ls_out-zzokof_2014.
+    ls_okof_key-okof_dop = ls_out-okofdop.
+    APPEND ls_okof_key TO lt_okof_key.
+  ENDLOOP.
+  IF NOT lt_okof_key IS INITIAL.
+    SELECT okof zzokof_2014 okof_dop zzseparable
+       FROM j_3rftokof
+       INTO TABLE lt_okof
+      FOR ALL ENTRIES IN lt_okof_key
+       WHERE okof = lt_okof_key-okof
+       AND   zzokof_2014 = lt_okof_key-zzokof_2014
+       AND   okof_dop = lt_okof_key-okof_dop.
+    SORT lt_okof BY okof zzokof_2014 okof_dop.
+  ENDIF.
+
+  LOOP AT lt_out INTO ls_out.
+    MOVE-CORRESPONDING ls_out TO ls_gout.
+    ls_gout-land = gv_land.
+    IF ls_out-anka_type >< 'НМА'.
+      CLEAR ls_gout-txk50.
+    ENDIF.
+    IF ls_out-anka_type >< 'НКС'.
+      CLEAR ls_gout-zugdt.
+    ENDIF.
+    IF ls_out-xafabch = abap_true.
+      ls_gout-xafabch_txt = c_old.
+    ELSEIF ls_out-xafabch = 'Y' .
+      ls_gout-xafabch_txt = space.
+    ELSE.
+      ls_gout-xafabch_txt = c_new.
+    ENDIF.
+    CONCATENATE ls_out-txt50 ls_out-txa50 INTO ls_gout-txt50_txa50 SEPARATED BY space.
+    CLEAR: ls_conserv, ls_screwt, ls_cadastr, ls_j_3rfproptaxv, ls_anlz, ls_j_3rtasset
+         , ls_pa0002, ls_anep, ls_okof, ls_t095, ls_t006a ", ls_subrf, ls_gorpunkt
+         , ls_v_anepk
+         .
+    READ TABLE lt_t095 INTO ls_t095 WITH TABLE KEY ktogr = ls_out-ktogr.
+
+    READ TABLE lt_conserv INTO ls_conserv WITH KEY bukrs = ls_out-bukrs
+                                                   anln1 = ls_out-anln1
+                                                   anln2 = ls_out-anln2
+                                                   invnr = ls_out-invnr BINARY SEARCH.
+    READ TABLE lt_screwt INTO ls_screwt WITH TABLE KEY zzkust = ls_out-zzgroupname
+                                                       zzscrew = ls_out-zzoilwell.
+    READ TABLE lt_cadastr INTO ls_cadastr WITH KEY bukrs = ls_out-bukrs
+                                                   anln1 = ls_out-anln1
+                                                   anln2 = ls_out-anln2 BINARY SEARCH.
+    READ TABLE lt_j_3rfproptaxv INTO ls_j_3rfproptaxv WITH KEY bukrs = ls_out-bukrs
+                                                               anln1 = ls_out-anln1
+                                                               anln2 = ls_out-anln2 BINARY SEARCH.
+
+    READ TABLE lt_anlz INTO ls_anlz WITH KEY bukrs = ls_out-bukrs
+                                             anln1 = ls_out-anln1
+                                             anln2 = ls_out-anln2 BINARY SEARCH.
+    IF NOT ls_anlz-gsber IN so_gsber .
+      CLEAR ls_gout. CONTINUE.
+    ENDIF.
+
+    IF NOT ls_out-deakt IS INITIAL.
+      READ TABLE lt_v_anepk INTO ls_v_anepk WITH KEY anln1 = ls_out-anln1
+                                                     anln2 = ls_out-anln2 BINARY SEARCH.
+      IF ls_v_anepk-budat IS NOT INITIAL.
+        ls_out-deakt = ls_v_anepk-budat.
+      ENDIF.
+    ENDIF.
+
+    READ TABLE lt_anep INTO ls_anep WITH KEY anln1 = ls_out-anln1
+                                             anln2 = ls_out-anln2 BINARY SEARCH.
+
+    ls_gout-ktansw = ls_out-ktogr.
+    ls_gout-hkont_lus = ls_t095-ktansw.
+    IF NOT ls_conserv-consdate IS INITIAL.
+      WRITE ls_conserv-consdate TO ls_gout-act_num_date DD/MM/YYYY.
+    ENDIF.
+    CONCATENATE ls_conserv-actnum ls_gout-act_num_date INTO ls_gout-act_num_date SEPARATED BY space.
+    IF NOT ls_conserv-econsdate IS INITIAL.
+      WRITE ls_conserv-econsdate TO ls_gout-act_num_econsdate DD/MM/YYYY.
+    ENDIF.
+    CONCATENATE ls_conserv-actnum ls_gout-act_num_econsdate INTO ls_gout-act_num_econsdate SEPARATED BY space.
+    ls_gout-zzscrnm = ls_screwt-zzscrnm.
+    IF NOT ls_j_3rfproptaxv-okato1 IS INITIAL.
+      SHIFT ls_j_3rfproptaxv-okato1 RIGHT DELETING TRAILING space.
+      TRANSLATE ls_j_3rfproptaxv-okato1 USING ' 0'.
+    ENDIF.
+    CONCATENATE ls_j_3rfproptaxv-okato1 ls_j_3rfproptaxv-okato2 ls_j_3rfproptaxv-okato3 ls_j_3rfproptaxv-okato4 INTO ls_gout-oktmo SEPARATED BY space.
+    ls_gout-gsber = ls_anlz-gsber.
+    ls_gout-podrazd = ls_anlz-ktext.
+    IF ls_cadastr-cadastr_num IS INITIAL.
+      ls_gout-cadastr_num = ls_out-fiamt.
+    ELSE.
+      ls_gout-cadastr_num = ls_cadastr-cadastr_num.
+    ENDIF.
+    ls_gout-cadastr = ls_cadastr-cadastr.
+    ls_gout-adatu_prisv = ls_cadastr-adatu.
+
+    READ TABLE lt_anlb WITH KEY anln1 = ls_gout-anln1
+                                anln2 = ls_gout-anln2 TRANSPORTING NO FIELDS BINARY SEARCH.
+    IF sy-subrc EQ 0.
+      lv_tabix = sy-tabix.
+      LOOP AT lt_anlb INTO ls_anlb FROM lv_tabix.
+        IF NOT ( ls_anlb-anln1 = ls_gout-anln1
+                 AND ls_anlb-anln2 = ls_gout-anln2 ).
+          EXIT.
+        ENDIF.
+        CLEAR ls_meth_amort.
+        READ TABLE lt_meth_amort INTO ls_meth_amort WITH TABLE KEY mcode = ls_anlb-afasl.
+        CASE ls_anlb-afabe.
+          WHEN c_bu.
+*            ls_gout-meth_rsbu = ls_anlb-afatxt.
+            ls_gout-meth_rsbu = ls_meth_amort-m_amort_eusi.
+            PERFORM calc_spi USING ls_anlb-ndjar
+                                   ls_anlb-ndper
+                          CHANGING ls_gout-spi_rsbu.
+
+            read_anlc.
+            PERFORM calc_ost_new USING ls_anlb-afabg
+                                       gs_bdatu-high
+                                       ls_anlb-ndjar
+                                       ls_anlb-ndper
+                          CHANGING ls_gout-ost_srsl_bu.
+          WHEN c_nu.
+*            ls_gout-meth_nu = ls_anlb-afatxt.
+            ls_gout-meth_nu = ls_meth_amort-m_amort_eusi.
+            PERFORM calc_spi USING ls_anlb-ndjar
+                                   ls_anlb-ndper
+                           CHANGING ls_gout-spi_nu.
+            read_anlc.
+            PERFORM calc_ost_new USING ls_anlb-afabg
+                                       gs_bdatu-high
+                                       ls_anlb-ndjar
+                                       ls_anlb-ndper
+                        CHANGING ls_gout-ost_srsl_nu.
+          WHEN c_msfo.
+*            ls_gout-meth_msfo = ls_anlb-afatxt.
+            ls_gout-meth_msfo = ls_meth_amort-m_amort_eusi.
+            read_anlc.
+            PERFORM calc_ost_new USING ls_anlb-afabg
+                                       gs_bdatu-high
+                                       ls_anlb-ndjar
+                                       ls_anlb-ndper
+                        CHANGING ls_gout-ost_srsl_msfo.
+
+            PERFORM calc_spi USING ls_anlb-ndjar
+                                  ls_anlb-ndper
+                         CHANGING ls_gout-spi_msfo.
+
+          WHEN c_eko.
+            PERFORM calc_spi USING ls_anlb-ndjar
+                                   ls_anlb-ndper
+                          CHANGING ls_gout-sr_sp_oc_ob_st.
+            ls_gout-dat_nac_sp_ob = ls_anlb-afabg.
+        ENDCASE.
+      ENDLOOP.
+    ENDIF.
+
+    READ TABLE lt_okof INTO ls_okof WITH KEY okof = ls_out-okof
+                                             zzokof_2014 = ls_out-zzokof_2014
+                                             okof_dop = ls_out-okofdop BINARY SEARCH.
+    CASE ls_okof-zzseparable.
+      WHEN abap_true.
+        ls_gout-zzseparable = '1'.
+        ls_gout-otd_im = 'Отделимое'.
+      WHEN OTHERS.
+        ls_gout-zzseparable = '0'.
+        ls_gout-otd_im = 'Неотделимое'.
+    ENDCASE.
+    READ TABLE lt_j_3rtasset INTO ls_j_3rtasset WITH KEY bukrs = ls_out-bukrs
+                                                         anln1 = ls_out-anln1
+                                                         anln2 = ls_out-anln2 BINARY SEARCH.
+    ls_gout-nom_reg_ts = ls_j_3rtasset-license_num.
+    ls_gout-aktiv_opr = ls_j_3rtasset-adatu.
+    READ TABLE lt_t006a INTO ls_t006a WITH TABLE KEY msehi = ls_j_3rtasset-unitp.
+    ls_gout-unitp = ls_t006a-mseh6.
+
+    ls_gout-power = ls_j_3rtasset-power.
+    ls_gout-cprtx = ls_j_3rtasset-cprtx.
+    ls_gout-reg_adatu = ls_j_3rtasset-adatu.
+    ls_gout-bdatu_asset = ls_j_3rtasset-bdatu.
+    IF ls_out-aedat IS NOT INITIAL.
+      ls_gout-dat_upd = ls_out-aedat.
+    ELSE.
+      ls_gout-dat_upd = ls_out-erdat.
+    ENDIF.
+    IF ls_j_3rfproptaxv-privilege IS INITIAL.
+      ls_gout-lgot_appl = 0.
+    ELSE.
+      ls_gout-lgot_appl = 1.
+    ENDIF.
+
+    ls_gout-sub_rf = ls_j_3rfproptaxv-okato1.
+    ls_gout-gor_punkt = ls_j_3rfproptaxv-okato3.
+    ls_gout-privilege = ls_j_3rfproptaxv-privilege.
+    ls_gout-adatu = ls_j_3rfproptaxv-adatu.
+    ls_gout-bdatu = ls_j_3rfproptaxv-bdatu.
+    ls_gout-prich_vyb = ls_anep-bwatxt.
+    ls_gout-dat_vv_expl = ls_out-aktiv_exp.
+    READ TABLE lt_pa0002 INTO ls_pa0002 WITH KEY pernr = ls_anlz-pernr BINARY SEARCH.
+    CONCATENATE ls_pa0002-nachn ls_pa0002-inits INTO ls_gout-mol.
+
+    afab_auth c_bu.
+    IF sy-subrc EQ 0.
+      PERFORM calc_cost USING p_bukrs
+                              gs_bdatu-high
+                              ls_out-anln1
+                              ls_out-anln2
+                              c_bu
+                     CHANGING lv_a_sum
+                              lv_o_sum
+                              lv_dd_sum
+                              lv_tt_sum .
+      ls_gout-perv_st_bu = lv_a_sum.
+      ls_gout-ost_st_bu = lv_tt_sum.
+      ls_gout-amort_nakop_rsbu = lv_dd_sum.
+    ENDIF.
+    afab_auth c_msfo.
+    IF sy-subrc EQ 0.
+      PERFORM calc_cost USING p_bukrs
+                           gs_bdatu-high
+                           ls_out-anln1
+                           ls_out-anln2
+                           c_msfo
+                  CHANGING lv_a_sum
+                           lv_o_sum
+                           lv_dd_sum
+                           lv_tt_sum .
+      ls_gout-perv_st_msfo = lv_a_sum.
+      ls_gout-ost_st_msfo = lv_tt_sum.
+    ENDIF.
+    afab_auth c_nu.
+    IF sy-subrc EQ 0.
+      PERFORM calc_cost USING p_bukrs
+                               gs_bdatu-high
+                               ls_out-anln1
+                               ls_out-anln2
+                               c_nu
+                      CHANGING lv_a_sum
+                               lv_o_sum
+                               lv_dd_sum
+                               lv_tt_sum .
+      ls_gout-perv_st_nu = lv_a_sum.
+      ls_gout-amort_nakop = lv_dd_sum.
+      ls_gout-ost_st_nu = lv_tt_sum.
+    ENDIF.
+    afab_auth c_eko.
+    IF sy-subrc EQ 0.
+      PERFORM calc_cost USING p_bukrs
+                              gs_bdatu-high
+                              ls_out-anln1
+                              ls_out-anln2
+                              c_eko
+                     CHANGING lv_a_sum
+                              lv_o_sum
+                              lv_dd_sum
+                              lv_tt_sum .
+      ls_gout-sum_oc_ob = lv_a_sum.
+      ls_gout-ost_st_oc_ob = lv_tt_sum.
+    ENDIF.
+
+    READ TABLE lt_j_3rfproptaxr WITH KEY region = ls_j_3rfproptaxv-okato1
+                                         privilege = ls_j_3rfproptaxv-privilege BINARY SEARCH TRANSPORTING NO FIELDS.
+    IF sy-subrc EQ 0.
+      lv_tabix = sy-tabix.
+      LOOP AT lt_j_3rfproptaxr INTO ls_j_3rfproptaxr FROM lv_tabix.
+        IF ls_j_3rfproptaxr-district = ls_j_3rfproptaxv-okato2. "Sorted descending
+          ls_gout-nal_st_lu_ni = ls_j_3rfproptaxr-rate.
+          EXIT.
+        ENDIF.
+        IF ls_j_3rfproptaxr-district = space.
+          ls_gout-nal_st_lu_ni = ls_j_3rfproptaxr-rate.
+          EXIT.
+        ENDIF.
+        IF NOT ( ls_j_3rfproptaxr-region = ls_j_3rfproptaxv-okato1 AND ls_j_3rfproptaxr-privilege = ls_j_3rfproptaxv-privilege ).
+          EXIT.
+        ENDIF.
+      ENDLOOP.
+    ENDIF.
+    IF ls_out-proptype = '4'.
+      ls_gout-proptype = '1'.
+    ELSE .
+      ls_gout-proptype = '0'.
+    ENDIF.
+    ls_gout-msfak = ls_anlz-msfak.
+    CHECK NOT ( ls_gout-perv_st_bu IS INITIAL AND ls_gout-ost_st_bu IS INITIAL
+                AND ls_gout-amort_nakop_rsbu IS INITIAL AND ls_gout-perv_st_msfo IS INITIAL
+                AND ls_gout-ost_st_msfo IS INITIAL AND ls_gout-perv_st_nu IS INITIAL
+                AND ls_gout-amort_nakop IS INITIAL AND ls_gout-ost_st_nu IS INITIAL
+                AND ls_gout-sum_oc_ob IS INITIAL AND ls_gout-ost_st_oc_ob IS INITIAL ).
+
+    APPEND ls_gout TO gt_out. CLEAR ls_gout.
+  ENDLOOP.
+  ASSIGN gt_out TO <gt_out>.
+ENDFORM.                    " select_osn
+*&---------------------------------------------------------------------*
+*&      Module  STATUS_0100  OUTPUT
+*&---------------------------------------------------------------------*
+MODULE status_0100 OUTPUT.
+  SET PF-STATUS '0100'.
+  IF ch_rek EQ abap_true OR ch_doo EQ abap_true OR ch_nma EQ abap_true.
+    SET TITLEBAR '0100' WITH text-s01 c_eusi c_sap.
+    LOOP AT SCREEN.
+      IF screen-group1 = 'BDA'.
+        screen-active = 0.
+        MODIFY SCREEN.
+      ENDIF.
+    ENDLOOP.
+  ELSE.
+    SET TITLEBAR '0100' WITH text-s02 c_sap c_eusi.
+  ENDIF.
+
+  IF gr_cont100 IS INITIAL.
+    PERFORM build_scr_settings100 CHANGING gs_layout100
+                                           gt_fcat100 .
+    CREATE OBJECT gr_cont100 EXPORTING container_name = gv_cont100.
+    CREATE OBJECT gr_grid100 EXPORTING i_parent = gr_cont100.
+    CREATE OBJECT gr_eh100 .
+    SET HANDLER gr_eh100->h_toolbar FOR gr_grid100.
+    SET HANDLER gr_eh100->h_ucom FOR gr_grid100.
+    SET HANDLER gr_eh100->h_dclick FOR gr_grid100.
+
+    gr_grid100->set_table_for_first_display(
+      EXPORTING
+        is_layout       = gs_layout100
+      CHANGING
+        it_fieldcatalog = gt_fcat100
+        it_outtab       = <gt_out> ).
+  ENDIF.
+ENDMODULE.                 " status_0100  OUTPUT
+
+*&---------------------------------------------------------------------*
+*&      Module  USER_COMMAND_0100  INPUT
+*&---------------------------------------------------------------------*
+MODULE user_command_0100 INPUT.
+  cl_gui_cfw=>dispatch( ).
+  CASE gv_ok100.
+    WHEN 'EXIT'.
+      CLEAR gv_ok100.
+      LEAVE TO SCREEN 0.
+    WHEN OTHERS.
+  ENDCASE.
+  CLEAR gv_ok100.
+ENDMODULE.                 " USER_COMMAND_0100  INPUT
+
+*&---------------------------------------------------------------------*
+*&      Form  build_scr_settings100
+*&---------------------------------------------------------------------*
+FORM build_scr_settings100 CHANGING cs_layout TYPE lvc_s_layo
+                                    ct_fcat TYPE lvc_t_fcat.
+
+  DATA: lv_struc TYPE dd02l-tabname.
+  FIELD-SYMBOLS: <wa_fcat> LIKE LINE OF ct_fcat.
+
+  cs_layout-cwidth_opt = abap_true.
+  CASE abap_true.
+    WHEN ch_osn.
+      CONCATENATE text-t01 p_bukrs INTO cs_layout-grid_title
+              SEPARATED BY space.
+      lv_struc = 'ZSGFT_EUSI'.
+    WHEN ch_dvi.
+      CONCATENATE text-t02 p_bukrs INTO cs_layout-grid_title
+              SEPARATED BY space.
+      lv_struc = 'ZSGFT_EUSI_DV'.
+    WHEN ch_con.
+      CONCATENATE text-t03 p_bukrs INTO cs_layout-grid_title
+              SEPARATED BY space.
+      lv_struc = 'ZSGFT_EUSI_CN'.
+    WHEN ch_rek.
+      lv_struc = 'ZGFT_EUSI_REK_UPL'.
+      CONCATENATE text-t04 p_bukrs INTO cs_layout-grid_title
+              SEPARATED BY space.
+    WHEN ch_doo.
+      lv_struc = 'ZGFT_EUSI_REK'.
+      CONCATENATE text-t05 p_bukrs INTO cs_layout-grid_title
+              SEPARATED BY space.
+      cs_layout-sel_mode = 'A'.
+    WHEN ch_nma.
+      lv_struc = 'ZGFT_EUSI_REK_NMA'.
+      CONCATENATE text-t06 p_bukrs INTO cs_layout-grid_title
+              SEPARATED BY space.
+  ENDCASE.
+
+  CALL FUNCTION 'LVC_FIELDCATALOG_MERGE'
+    EXPORTING
+      i_structure_name       = lv_struc
+      i_bypassing_buffer     = abap_true
+    CHANGING
+      ct_fieldcat            = ct_fcat
+    EXCEPTIONS
+      inconsistent_interface = 1
+      program_error          = 2
+      OTHERS                 = 3.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+
+  LOOP AT ct_fcat ASSIGNING <wa_fcat>.
+    <wa_fcat>-no_out = space.
+    CASE <wa_fcat>-fieldname .
+      WHEN 'AMORT_NAKOP'.
+        <wa_fcat>-lzero = abap_true.
+      WHEN 'BWATXT'.
+        CLEAR <wa_fcat>-ref_table.
+        <wa_fcat>-scrtext_s = <wa_fcat>-scrtext_m = <wa_fcat>-scrtext_l =
+        <wa_fcat>-reptext = 'ТекстВДвSAP'.
+      WHEN 'BWATXT1'.
+        CLEAR <wa_fcat>-ref_table.
+        <wa_fcat>-scrtext_s = <wa_fcat>-scrtext_m = <wa_fcat>-scrtext_l =
+        <wa_fcat>-reptext = 'ТекстВДвЕУСИ'.
+      WHEN 'BUKRS' OR 'KAD_ADATU' OR 'OKTMO_ADATU'" OR 'ADATU'
+"Скоро появятся в системе
+      OR 'COD_IFNS' OR 'FED_OKR' OR 'ADDRESS' OR 'SOST_RSBU' OR 'SCVD_NUM'
+      OR 'VID_PRAVA' OR 'S_ZASTR' OR 'S_OBS_ZD' OR 'ETAGES' OR 'U_ETAGES' OR 'L_LIN_SOOR'
+      OR 'D_SKV' OR 'GOD_POSTR' OR 'S_KV_M' OR 'N_KADASTR' OR 'CAT_ZEM' OR 'RAZR_ISP'
+      OR 'LIC_UCH' OR 'SOST_MSFO' OR 'PRIZN_II' OR 'COD_POK_IKSO' OR 'COD_POK_IKSO_PST'
+      OR 'PRIZN_IM_PROD' OR 'ZATR_PROD' OR 'POZ_CONS' "OR 'VYB_BAS_NAL' OR 'HKONT_LUS'
+"Эти, что ниже, пока помечены как дубликаты
+      OR 'TXK50' OR 'AMORT_GR_NU' OR 'COEF_USK_AM_NU' OR 'CADASTR_NUM1' OR 'SUM_OC_OB_ST'.
+        <wa_fcat>-tech = abap_true.
+    ENDCASE.
+  ENDLOOP.
+ENDFORM.                    " build_scr_settings100
+
+*&---------------------------------------------------------------------*
+*&      Form  h_toolbar
+*&---------------------------------------------------------------------*
+FORM h_toolbar USING i_object TYPE REF TO cl_alv_event_toolbar_set.
+  DATA: ls_toolbar TYPE stb_button.
+  CASE abap_true.
+    WHEN ch_osn OR ch_dvi OR ch_con.
+      CLEAR ls_toolbar.
+      MOVE 'TO_EXCEL' TO ls_toolbar-function.
+      MOVE icon_xls TO ls_toolbar-icon.
+      MOVE text-a01 TO ls_toolbar-quickinfo.
+      MOVE '' TO ls_toolbar-text.
+      MOVE '' TO ls_toolbar-disabled.
+      APPEND ls_toolbar TO i_object->mt_toolbar.
+    WHEN ch_rek.
+      CLEAR ls_toolbar.
+      MOVE 'TO_DB' TO ls_toolbar-function.
+      MOVE  icon_assign TO ls_toolbar-icon.
+      MOVE text-a02 TO ls_toolbar-quickinfo.
+      MOVE text-a03 TO ls_toolbar-text.
+      MOVE '' TO ls_toolbar-disabled.
+      APPEND ls_toolbar TO i_object->mt_toolbar.
+
+      CLEAR ls_toolbar.
+      MOVE 'TO_DB_ALL' TO ls_toolbar-function.
+      MOVE  icon_assign TO ls_toolbar-icon.
+      MOVE text-a06 TO ls_toolbar-quickinfo.
+      MOVE text-a07 TO ls_toolbar-text.
+      MOVE '' TO ls_toolbar-disabled.
+      APPEND ls_toolbar TO i_object->mt_toolbar.
+    WHEN ch_doo.
+      CLEAR ls_toolbar.
+      MOVE 'TO_DB_PR' TO ls_toolbar-function.
+      MOVE  icon_assign TO ls_toolbar-icon.
+      MOVE text-a04 TO ls_toolbar-quickinfo.
+      MOVE text-a05 TO ls_toolbar-text.
+      MOVE '' TO ls_toolbar-disabled.
+      APPEND ls_toolbar TO i_object->mt_toolbar.
+  ENDCASE.
+ENDFORM.                    "h_toolbar
+*&---------------------------------------------------------------------*
+*&      Form  CALC_COST
+*&---------------------------------------------------------------------*
+FORM calc_cost  USING    p_bukrs TYPE anla-bukrs
+                         p_bdatu TYPE bdatu
+                         p_anln1 TYPE anla-anln1
+                         p_anln2 TYPE anla-anln2
+                         p_afabe TYPE anlb-afabe
+                CHANGING c_a_sum TYPE tslvt
+                         c_o_sum TYPE tslvt
+                         c_dd_sum TYPE tslvt
+                         c_tt_sum TYPE tslvt.
+  CLEAR: c_a_sum, c_o_sum, c_dd_sum, c_tt_sum.
+  CASE sy-sysid(2).
+    WHEN 'GC' OR 'TU'.
+      CALL FUNCTION 'Z_GFL_SV_FIAA_ACTCOST'
+        EXPORTING
+          bukrs  = p_bukrs
+          date   = p_bdatu
+          anln1  = p_anln1
+          anln2  = p_anln2
+          afabe  = p_afabe
+        IMPORTING
+          a_sum  = c_a_sum
+          o_sum  = c_o_sum
+*          dd_sum = c_dd_sum
+          d_sum = c_dd_sum
+          tt_sum = c_tt_sum.
+    WHEN 'TB'.
+      CALL FUNCTION 'Z_GFT_FIAA_ACTCOST2'
+        EXPORTING
+          bukrs = p_bukrs
+          date  = p_bdatu
+          anln1 = p_anln1
+          anln2 = p_anln2
+          afabe = p_afabe
+        IMPORTING
+          a_sum = c_a_sum
+          o_sum = c_o_sum
+          d_sum = c_dd_sum
+          t_sum = c_tt_sum.
+  ENDCASE.
+ENDFORM.                    " CALC_COST
+*&---------------------------------------------------------------------*
+*&      Form  h_ucom
+*&---------------------------------------------------------------------*
+
+FORM h_ucom USING p_ucomm TYPE sy-ucomm.
+  DATA: lt_rows TYPE lvc_t_row.
+  DATA: lv_answer.
+
+  CASE p_ucomm.
+    WHEN 'TO_EXCEL'.
+      PERFORM export_to_excel .
+    WHEN 'TO_DB'.
+      PERFORM save_to_db.
+      PERFORM refresh_grid.
+    WHEN 'TO_DB_ALL'.
+      PERFORM save_to_db_big.
+      PERFORM refresh_grid.
+    WHEN 'TO_DB_PR'.
+      PERFORM get_selrows CHANGING lt_rows.
+      IF lt_rows IS INITIAL.
+        PERFORM confirm USING 'Вы не выбрали ни одной записи. Продолжить по всем записям?'
+                        CHANGING lv_answer.
+        CASE lv_answer.
+          WHEN '1'.
+            PERFORM save_to_db_pr USING lt_rows.
+          WHEN '2'.
+            MESSAGE 'Действие отменено' TYPE 'S'.
+        ENDCASE.
+      ELSE.
+        PERFORM save_to_db_pr USING lt_rows.
+      ENDIF.
+      PERFORM refresh_grid.
+  ENDCASE.
+ENDFORM.                    " h_ucom
+*&---------------------------------------------------------------------*
+*&      Form  EXPORT_TO_EXCEL
+*&---------------------------------------------------------------------*
+FORM export_to_excel .
+  DEFINE conv_dat_ch .
+    if not &1 is initial.
+      write &1 to &2 dd/mm/yyyy.
+    else.
+      clear &2.
+    endif.
+    if &3 is not initial.
+      if &1 = '99991231'.
+        clear &2.
+      endif.
+    endif.
+  END-OF-DEFINITION.
+
+  DATA: lo_docking_container TYPE REF TO cl_gui_docking_container
+      , lo_control TYPE REF TO i_oi_container_control
+      , lo_document_proxy TYPE REF TO i_oi_document_proxy
+      , lo_excel_iface TYPE REF TO i_oi_spreadsheet
+      , lo_error TYPE REF TO i_oi_error
+      , lc_exceltype TYPE soi_document_type VALUE soi_doctype_excel_sheet
+      , lv_retcode TYPE soi_ret_string
+      , lv_lines TYPE i
+      , lv_border TYPE i
+      , ls_out LIKE LINE OF gt_out
+      , ls_out_dv LIKE LINE OF gt_out_dv
+      , ls_out_cn LIKE LINE OF gt_out_cn
+      , lt_exc TYPE STANDARD TABLE OF zsgft_eusi_excel
+      , ls_exc LIKE LINE OF lt_exc
+      , lv_dname TYPE x030l-tabname
+      , lt_exc_dv TYPE STANDARD TABLE OF zsgft_eusi_dv_ex
+      , ls_dv LIKE LINE OF lt_exc_dv
+      , lt_exc_cn TYPE STANDARD TABLE OF zsgft_eusi_cn_ex
+      , ls_cn LIKE LINE OF lt_exc_cn
+      , lv_cols TYPE i
+      , lv_id TYPE bapicompon-comp_id
+      , lv_ddir TYPE string
+      , lv_sel TYPE string
+      , lv_filename(240)
+      , ls_centr TYPE ztgft_eusi_centr
+      , lv_bukrs LIKE p_bukrs
+      , ldr_out TYPE REF TO data
+      , lv_last
+      , lv_top TYPE i VALUE 13
+      , lv_rem TYPE i
+      , lv_rname(10)
+      , c TYPE c
+      , lv_vers(30)
+      , lv_zzokof_2014 LIKE ls_exc-zzokof_2014
+      , lv_fullname(162)
+      , lv_fulltel(82)
+      , lv_email(100)
+      , lt_ret TYPE STANDARD TABLE OF bapiret2
+      , ls_addr TYPE bapiaddr3
+      , lt_tel TYPE STANDARD TABLE OF bapiadtel
+      , ls_tel LIKE LINE OF lt_tel
+      , lt_email TYPE STANDARD TABLE OF bapiadsmtp
+      , ls_email LIKE LINE OF lt_email
+      .
+
+
+  FIELD-SYMBOLS: <fs> TYPE x
+               , <wa> TYPE ANY
+               , <lt_out> TYPE STANDARD TABLE
+               .
+
+  cl_gui_frontend_services=>get_desktop_directory( CHANGING desktop_directory = lv_ddir ).
+  cl_gui_cfw=>flush( ).
+
+  cl_gui_frontend_services=>directory_browse(
+    EXPORTING
+      initial_folder       = lv_ddir
+    CHANGING
+      selected_folder      = lv_sel ).
+  cl_gui_cfw=>flush( ).
+
+  CHECK lv_sel IS NOT INITIAL.
+  SELECT SINGLE *
+  FROM ztgft_eusi_centr
+  INTO ls_centr
+  WHERE bukrs_t = p_bukrs.
+
+  WRITE sy-datum TO lv_vers DD/MM/YYYY.
+  CONCATENATE lv_vers ` ` sy-uzeit(2) ':' sy-uzeit+2(2) ':' sy-uzeit+4(2) INTO lv_vers.
+
+  CLEAR sscrfields-ucomm.
+
+  IF ch_osn = 'X' OR sscrfields-ucomm = 'PB01'.
+
+    lv_id = 'OS.xlsx'.
+    lv_dname = 'ZSGFT_EUSI_EXCEL'.
+    lv_top = 14.
+    lv_cols = 145.
+
+    LOOP AT gt_out INTO ls_out.
+      MOVE-CORRESPONDING ls_out TO ls_exc.
+      CLEAR ls_exc-leafi.
+      IF ls_centr-bukrs_c IS NOT INITIAL.
+        ls_exc-bukrs = ls_centr-bukrs_c.
+      ENDIF.
+      CONDENSE ls_exc-oktmo NO-GAPS.
+      SHIFT ls_exc-oktmo LEFT DELETING LEADING space.
+
+      conv_dat_ch: ls_out-data_pr_uch ls_exc-data_pr_uch ''
+                 , ls_out-aktiv_exp ls_exc-aktiv_exp ''
+                 , ls_out-lvdat ls_exc-lvdat ''
+                 , ls_out-zugdt ls_exc-zugdt ''
+                 , ls_out-zzsharedate ls_exc-zzsharedate ''
+                 , ls_out-deakt ls_exc-deakt ''
+                 , ls_out-dat_upd ls_exc-dat_upd ''
+                 , ls_out-aktiv_msfo ls_exc-aktiv_msfo ''
+                 , ls_out-dat_nac_sp_ob ls_exc-dat_nac_sp_ob ''
+                 , ls_out-adatu ls_exc-adatu ''
+                 , ls_out-bdatu ls_exc-bdatu ''
+                 , ls_out-aktiv_opr ls_exc-aktiv_opr ''
+                 , ls_out-bdatu_asset ls_exc-bdatu_asset 'X'
+                 , ls_out-adatu_prisv ls_exc-adatu_prisv ''
+                 .
+      ls_exc-cat_ts = ls_out-ctypv.
+      CALL FUNCTION 'CONVERSION_EXIT_ABPSP_OUTPUT'
+        EXPORTING
+          input  = ls_out-posnr
+        IMPORTING
+          output = ls_exc-posnr.
+      IF ls_out-proptype = '1'.
+        ls_exc-zzseparable = 'Движимое'.
+      ELSE.
+        ls_exc-zzseparable = 'Недвижимое'.
+      ENDIF.
+      IF ls_exc-okofdop(1) = 'N'.
+        ls_exc-okofdop(1) = 0.
+      ENDIF.
+      IF ls_exc-zzenvircl CO '-'.
+        CLEAR ls_exc-zzenvircl.
+      ENDIF.
+      IF ls_exc-cadastr_num IS INITIAL.
+        ls_exc-vyb_bas_nal = 'Среднегодовая стоимость'.
+      ELSE.
+        ls_exc-vyb_bas_nal = 'Кадастровая стоимость'.
+      ENDIF.
+      IF ls_exc-zzokof_2014 NE space.
+        lv_zzokof_2014 = ls_exc-zzokof_2014.
+        TRANSLATE lv_zzokof_2014 TO LOWER CASE.
+        IF lv_zzokof_2014(9) = 'нет соотв'.
+          CLEAR ls_exc-zzokof_2014.
+        ENDIF.
+      ENDIF.
+
+      IF NOT ls_out-msfak IS INITIAL.
+        WRITE ls_out-msfak TO ls_exc-msfak LEFT-JUSTIFIED.
+      ELSE.
+        CLEAR ls_exc-msfak.
+      ENDIF.
+      SHIFT ls_exc-lic_uch LEFT DELETING LEADING '0'.
+      SHIFT ls_exc-lic_uch RIGHT DELETING TRAILING space.
+      CLEAR: ls_exc-okofdop, ls_exc-txk50, ls_exc-proptype.
+      APPEND ls_exc TO lt_exc. CLEAR ls_exc.
+    ENDLOOP.
+    ASSIGN lt_exc TO <gt_exc>.
+
+    IF ls_centr-bukrs_c IS INITIAL.
+      lv_bukrs = p_bukrs.
+    ELSE.
+      lv_bukrs = ls_centr-bukrs_c.
+    ENDIF.
+    lv_filename(4) = gs_bdatu-high(4).
+    lv_filename+4(1) = '_'.
+    lv_filename+5(2) = gs_bdatu-high+4(2).
+    lv_filename+7(1) = '_'.
+    lv_filename+8(2) = gs_bdatu-high+6(2).
+    SHIFT lv_filename LEFT DELETING LEADING space.
+    TRANSLATE lv_filename USING '._'.
+    CONCATENATE lv_bukrs lv_filename 'BUH_01' sy-sysid INTO lv_filename SEPARATED BY '_'.
+    CONCATENATE lv_sel '\' lv_filename '.xls' INTO lv_filename.
+
+  ELSEIF ch_dvi = 'X'  OR sscrfields-ucomm = 'PB02'.
+    lv_id = 'DVI.xlsx'.
+    lv_dname = 'ZSGFT_EUSI_DV_EX'.
+
+    lv_top = 14.
+    lv_cols = 11.
+
+    LOOP AT gt_out_dv INTO ls_out_dv.
+      MOVE-CORRESPONDING ls_out_dv TO ls_dv.
+      IF ls_centr-bukrs_c IS NOT INITIAL.
+        ls_dv-bukrs = ls_centr-bukrs_c.
+      ENDIF.
+      APPEND ls_dv TO lt_exc_dv. CLEAR ls_dv.
+    ENDLOOP.
+    ASSIGN lt_exc_dv TO <gt_exc>.
+
+    IF ls_centr-bukrs_c IS INITIAL.
+      lv_bukrs = p_bukrs.
+    ELSE.
+      lv_bukrs = ls_centr-bukrs_c.
+    ENDIF.
+    lv_filename(4) = gs_bdatu-high(4).
+    lv_filename+4(1) = '_'.
+    lv_filename+5(2) = gs_bdatu-high+4(2).
+    lv_filename+7(1) = '_'.
+    lv_filename+8(2) = gs_bdatu-high+6(2).
+    SHIFT lv_filename LEFT DELETING LEADING space.
+    TRANSLATE lv_filename USING '._'.
+    CONCATENATE lv_bukrs lv_filename 'BUH_02' 'RSBU' sy-sysid INTO lv_filename SEPARATED BY '_'.
+    CONCATENATE lv_sel '\' lv_filename '.xls' INTO lv_filename.
+
+    CALL FUNCTION 'BAPI_USER_GET_DETAIL'
+      EXPORTING
+        username = sy-uname
+      IMPORTING
+        address  = ls_addr
+      TABLES
+        return   = lt_ret
+        addtel   = lt_tel
+        addsmtp  = lt_email.
+
+    CONCATENATE ls_addr-lastname ls_addr-firstname INTO lv_fullname SEPARATED BY space.
+
+    LOOP AT lt_tel INTO ls_tel WHERE std_no IS NOT INITIAL.
+      CONCATENATE ls_tel-tel_no 'доб.' ls_tel-extension INTO lv_fulltel SEPARATED BY space.
+      EXIT.
+    ENDLOOP.
+
+    LOOP AT lt_email INTO ls_email WHERE std_no IS NOT INITIAL.
+      lv_email = ls_email-e_mail.
+      EXIT.
+    ENDLOOP.
+
+  ELSEIF ch_con = 'X'.
+    lv_id = 'CNT.xls'.
+    lv_dname = 'ZSGFT_EUSI_CN_EX'.
+    lv_cols = 14.
+
+    LOOP AT gt_out_cn_all INTO ls_out_cn.
+      MOVE-CORRESPONDING ls_out_cn TO ls_cn.
+      ls_cn-bukrs = p_bukrs.
+      ls_cn-count_obj = 1.
+      WRITE gv_repdate TO ls_cn-date_exp DD/MM/YYYY.
+      WRITE gs_bdatu-high TO ls_cn-date_upd DD/MM/YYYY.
+      APPEND ls_cn TO lt_exc_cn. CLEAR ls_cn.
+    ENDLOOP.
+    ASSIGN lt_exc_cn TO <gt_exc>.
+
+    IF ls_centr-bukrs_c IS INITIAL.
+      lv_bukrs = p_bukrs.
+    ELSE.
+      lv_bukrs = ls_centr-bukrs_c.
+    ENDIF.
+
+    lv_filename(4) = gs_bdatu-high(4).
+    lv_filename+4(1) = '_'.
+    lv_filename+5(2) = gs_bdatu-high+4(2).
+    lv_filename+7(1) = '_'.
+    lv_filename+8(2) = gs_bdatu-high+6(2).
+    SHIFT lv_filename LEFT DELETING LEADING space.
+    TRANSLATE lv_filename USING '._'.
+    CONCATENATE lv_bukrs lv_filename 'BUH_01' sy-sysid INTO lv_filename SEPARATED BY '_'.
+    CONCATENATE lv_sel '\' lv_filename '.xls' INTO lv_filename.
+  ENDIF.
+
+  PERFORM open_excel_doc_from_bds USING 'SOFFICEINTEGRATION'
+                                        'OT'
+                                        'ZGFT_IUSI_OS_NMA'
+                                        space
+                                        lv_id
+                                        lo_docking_container
+                                        lo_control
+                                        lo_document_proxy
+                                        lo_excel_iface
+                                        lo_error
+                                        lc_exceltype.
+
+  PERFORM insert_cell_xls USING '3' '2' lv_vers 'version' 3 2
+                              lo_docking_container
+                              lo_control
+                              lo_document_proxy
+                              lo_excel_iface
+                              lo_error
+                              lc_exceltype
+                              lv_retcode.
+  IF NOT ch_dvi IS INITIAL.
+    PERFORM insert_cell_xls USING '4' '2' lv_fullname 'fullname' 4 2
+                                lo_docking_container
+                                lo_control
+                                lo_document_proxy
+                                lo_excel_iface
+                                lo_error
+                                lc_exceltype
+                                lv_retcode.
+
+    PERFORM insert_cell_xls USING '5' '2' lv_fulltel 'fulltel' 5 2
+                                lo_docking_container
+                                lo_control
+                                lo_document_proxy
+                                lo_excel_iface
+                                lo_error
+                                lc_exceltype
+                                lv_retcode.
+
+    PERFORM insert_cell_xls USING '6' '2' lv_email 'email' 6 2
+                              lo_docking_container
+                              lo_control
+                              lo_document_proxy
+                              lo_excel_iface
+                              lo_error
+                              lc_exceltype
+                              lv_retcode.
+  ENDIF.
+
+  ASSIGN lv_border TO <fs> CASTING.
+  SET BIT 1 OF <fs> TO 0. "Толщина (Жирная линия)
+  SET BIT 2 OF <fs> TO 1. "Толщина
+  SET BIT 3 OF <fs> TO 1. "горизонтальная линия
+  SET BIT 4 OF <fs> TO 1. "вертикальная линия
+  SET BIT 5 OF <fs> TO 1. "правая
+  SET BIT 6 OF <fs> TO 1. "нижняя
+  SET BIT 7 OF <fs> TO 1. "верхняя
+  SET BIT 8 OF <fs> TO 1. "левая границы
+  lv_border = <fs>(1).
+
+  CREATE DATA ldr_out LIKE <gt_exc>.
+  ASSIGN ldr_out->* TO <lt_out>.
+
+  LOOP AT <gt_exc> ASSIGNING <wa>.
+    APPEND <wa> TO <lt_out>.
+    lv_lines = sy-tabix.
+    lv_rem = lv_lines MOD 15000.
+    AT LAST.
+      lv_last = 'X'.
+    ENDAT.
+    IF lv_rem IS INITIAL OR lv_last IS NOT INITIAL.
+      PERFORM get_prefix CHANGING c.
+      CONCATENATE c 'TT' INTO lv_rname.
+      lo_excel_iface->insert_range_dim(
+        EXPORTING
+          name     = lv_rname
+          top      = lv_top
+          left     = 2
+          rows     = lv_lines
+          columns  = lv_cols
+        IMPORTING
+          error    = lo_error
+          retcode  = lv_retcode ).
+
+      lo_excel_iface->set_frame(
+       EXPORTING
+         rangename = lv_rname
+         typ       = lv_border
+*        no_flush = abap_true
+         color     = 1 ).
+
+      lo_excel_iface->insert_one_table(
+        EXPORTING
+          ddic_name  = lv_dname
+          data_table = <lt_out>[]
+          rangename  = lv_rname
+          no_flush   = abap_false
+          wholetable = abap_true
+        IMPORTING
+          error      = lo_error
+          retcode    = lv_retcode ).
+      lv_top = lv_top + lv_lines.
+      CLEAR: <lt_out>, lv_lines.
+    ENDIF.
+  ENDLOOP.
+
+  lo_document_proxy->execute_macro( EXPORTING macro_string = 'ЭтаКнига.totals'
+                                    IMPORTING retcode = lv_retcode ).
+
+  lo_document_proxy->save_as(
+   EXPORTING
+     file_name   = lv_filename
+     no_flush    = ''
+     prompt_user = ''
+   IMPORTING
+     error       = lo_error
+     retcode     = lv_retcode ).
+
+  lo_docking_container->free( ) .
+ENDFORM.                    " EXPORT_TO_EXCEL
+
+*&---------------------------------------------------------------------*
+*&      Form  open_excel_doc_from_bds
+*&---------------------------------------------------------------------*
+FORM open_excel_doc_from_bds USING uv_classname TYPE sbdst_classname
+                                   uv_classtype TYPE sbdst_classtype
+                                   uv_objectkey TYPE sbdst_object_key
+                                   uv_inplace TYPE c
+                                   p_file TYPE bapicompon-comp_id
+                                   lo_docking_container TYPE REF TO cl_gui_docking_container
+                                   lo_control TYPE REF TO i_oi_container_control
+                                   lo_document_proxy TYPE REF TO i_oi_document_proxy
+                                   lo_excel_iface TYPE REF TO i_oi_spreadsheet
+                                   lo_error TYPE REF TO i_oi_error
+                                   lc_exceltype TYPE soi_document_type.
+
+  DATA lt_doc_uris TYPE sbdst_uri.
+  DATA ls_doc_uri LIKE LINE OF lt_doc_uris.
+  DATA lt_doc_signature TYPE sbdst_signature.
+  DATA lv_doc_url TYPE bapiuri-uri.
+  DATA lt_components TYPE  sbdst_components WITH HEADER LINE.
+  IF lo_document_proxy IS INITIAL.
+    PERFORM init_excel_proxy USING uv_inplace
+                                   lo_docking_container
+                                   lo_control
+                                   lo_document_proxy
+                                   lo_error
+                                   lc_exceltype.
+  ENDIF.
+  CHECK NOT lo_document_proxy IS INITIAL.
+
+  cl_bds_document_set=>get_with_url(
+    EXPORTING
+      classname       = uv_classname
+      classtype       = uv_classtype
+      object_key      = uv_objectkey
+    CHANGING
+      uris            = lt_doc_uris[]
+      signature       = lt_doc_signature[]
+      components      = lt_components[]
+    EXCEPTIONS
+      nothing_found   = 1
+      error_kpro      = 2
+      internal_error  = 3
+      parameter_error = 4
+      not_authorized  = 5
+      not_allowed     = 6 ).
+
+  IF sy-subrc NE 0 .
+    MESSAGE 'cl_bds_document_set=>get_with_url error' TYPE 'I'.
+    EXIT.
+  ENDIF.
+  LOOP AT lt_components WHERE comp_id = p_file.
+    LOOP AT lt_doc_uris INTO ls_doc_uri WHERE doc_count = lt_components-doc_count.
+      lv_doc_url = ls_doc_uri-uri.
+      EXIT .
+    ENDLOOP.
+    EXIT .
+  ENDLOOP.
+
+  lo_document_proxy->open_document(
+    EXPORTING
+      document_url  = lv_doc_url
+      open_inplace  = uv_inplace
+      open_readonly = ''
+    IMPORTING
+      error         = lo_error ).
+
+  lo_document_proxy->get_spreadsheet_interface(
+    EXPORTING
+      no_flush        = abap_true
+    IMPORTING
+      sheet_interface = lo_excel_iface
+      error           = lo_error ).
+
+ENDFORM.                    "open_excel_doc_from_bds
+
+
+*&---------------------------------------------------------------------*
+*&      Form  init_excel_proxy
+*&---------------------------------------------------------------------*
+FORM init_excel_proxy USING uv_inplace TYPE c
+                                   lo_docking_container TYPE REF TO cl_gui_docking_container
+                                   lo_control TYPE REF TO i_oi_container_control
+                                   lo_document_proxy TYPE REF TO i_oi_document_proxy
+                                   lo_error TYPE REF TO i_oi_error
+                                   lc_exceltype TYPE soi_document_type.
+  DATA lv_repid TYPE sy-repid.
+  DATA lv_dynnr TYPE sy-dynnr.
+
+  lv_repid = sy-repid.
+  lv_dynnr = sy-dynnr.
+
+  c_oi_container_control_creator=>get_container_control(
+    IMPORTING
+      control = lo_control
+      error   = lo_error ).
+
+  CREATE OBJECT lo_docking_container
+    EXPORTING
+      repid     = lv_repid
+      dynnr     = lv_dynnr
+      side      = cl_gui_docking_container=>dock_at_bottom
+      extension = 0.
+
+  lo_control->init_control(
+  EXPORTING
+    r3_application_name = ' '
+    inplace_enabled     = uv_inplace
+    parent              = lo_docking_container
+  IMPORTING
+    error               = lo_error ).
+
+  lo_control->get_document_proxy(
+    EXPORTING
+      document_type  = lc_exceltype
+    IMPORTING
+      document_proxy = lo_document_proxy ).
+ENDFORM.                    " init_excel_iface
+*&---------------------------------------------------------------------*
+*&      Form  AFAB_AUTH
+*&---------------------------------------------------------------------*
+FORM afab_auth .
+  DATA: lt_93 LIKE gt_93
+      , ls_93 LIKE LINE OF lt_93
+      , lt_set_values TYPE STANDARD TABLE OF rgsb4
+      .
+  REFRESH gt_afab_ok.
+  lt_93 = gt_93.
+  DELETE lt_93 WHERE table_line NOT IN so_afabe.
+
+  CALL FUNCTION 'G_SET_GET_ALL_VALUES'
+    EXPORTING
+      class         = '0000'
+      setnr         = 'ZGFT_EUSI_AFABE'
+    TABLES
+      set_values    = lt_set_values
+    EXCEPTIONS
+      set_not_found = 1
+      OTHERS        = 2.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+  LOOP AT lt_93 INTO ls_93.
+    READ TABLE lt_set_values WITH KEY FROM = ls_93 TRANSPORTING NO FIELDS.
+    CHECK sy-subrc EQ 0.
+*    AUTHORITY-CHECK OBJECT 'Z_ANEP_AFA'
+*             ID 'AFABE' FIELD ls_93
+*             ID 'IM_ACTVT' FIELD '03'.
+*    CHECK sy-subrc EQ 0.
+    COLLECT ls_93 INTO gt_afab_ok.
+  ENDLOOP.
+ENDFORM.                    " AFAB_AUTH
+*&---------------------------------------------------------------------*
+*&      Form  INFORM_AFAB
+*&---------------------------------------------------------------------*
+FORM inform_afab CHANGING c_ok TYPE char1.
+  c_ok = 1.
+*  DATA: ls_afab_ok LIKE LINE OF gt_afab_ok
+*      , lv_mess(75)
+*      .
+*  CLEAR gf_ok.
+*  IF LINES( gt_afab_ok ) > 0.
+*    LOOP AT gt_afab_ok INTO ls_afab_ok.
+*      IF lv_mess IS INITIAL.
+*        lv_mess = ls_afab_ok.
+*      ELSE.
+*        CONCATENATE lv_mess ls_afab_ok INTO lv_mess SEPARATED BY `, `.
+*      ENDIF.
+*    ENDLOOP.
+*    CONCATENATE 'Доступные области оценки:' lv_mess INTO lv_mess SEPARATED BY space.
+*  ELSE.
+*    lv_mess = 'У Вас нет полномочий на просмотр сумм'.
+*  ENDIF.
+*
+*  CALL FUNCTION 'POPUP_TO_CONFIRM'
+*    EXPORTING
+*      titlebar              = 'Проверка полномочий по областям оценки'
+*      text_question         = lv_mess
+*      text_button_1         = 'Продолжить'(001)
+*      text_button_2         = 'Отменить'(002)
+*      default_button        = '1'
+*      display_cancel_button = ''
+*      start_column          = 25
+*      start_row             = 6
+*    IMPORTING
+*      answer                = c_ok
+*    EXCEPTIONS
+*      text_not_found        = 1
+*      OTHERS                = 2.
+*  IF sy-subrc <> 0.
+*    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+*            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+*  ENDIF.
+ENDFORM.                    " INFORM_AFAB
+*&---------------------------------------------------------------------*
+*&      Form  CALC_SPI
+*&---------------------------------------------------------------------*
+FORM calc_spi USING  p_ndjar TYPE anlb-ndjar
+                     p_ndper TYPE anlb-ndper
+              CHANGING ch_spi TYPE zsgft_eusi-spi_rsbu.
+  ch_spi = p_ndjar * c_entire_y + p_ndper.
+ENDFORM.                    "calc_spi
+*&---------------------------------------------------------------------*
+*&      Form  CALC_OST
+*&---------------------------------------------------------------------*
+FORM calc_ost  USING p_ndjar TYPE anlb-ndjar
+                     p_ndper TYPE anlb-ndper
+                     p_ndabj TYPE anlc-ndabj
+                     p_ndabp TYPE anlc-ndabp
+               CHANGING ch_ost TYPE zsgft_eusi-ost_srsl_bu.
+  ch_ost = ( p_ndjar * c_entire_y + p_ndper ) - ( p_ndabj * c_entire_y - p_ndabp ).
+ENDFORM.                    " CALC_OST
+
+*&---------------------------------------------------------------------*
+*&      Form  calc_ost_new
+*&---------------------------------------------------------------------*
+FORM calc_ost_new  USING p_afabg TYPE anlb-afabg
+                         p_torepdate TYPE sy-datum
+                         p_ndjar TYPE anlb-ndjar
+                         p_ndper TYPE anlb-ndper
+               CHANGING ch_ost TYPE zsgft_eusi-ost_srsl_bu.
+  DATA: lv_month TYPE i
+      , lv_ost TYPE i
+      .
+*Месяцев использования
+  CALL FUNCTION 'MONTHS_BETWEEN_TWO_DATES'
+    EXPORTING
+      i_datum_bis   = p_torepdate
+      i_datum_von   = p_afabg
+      i_kz_incl_bis = 'X'
+    IMPORTING
+      e_monate      = lv_month.
+*Вычтем (общий срок использования - месяцев использования)
+  lv_ost = ( p_ndjar * c_entire_y + p_ndper ) -  lv_month.
+  IF lv_ost >= 0.
+    ch_ost = lv_ost.
+  ELSE.
+    CLEAR ch_ost.
+  ENDIF.
+ENDFORM.                    " CALC_OST
+*&---------------------------------------------------------------------*
+*&      Form  SELECT_DVI
+*&---------------------------------------------------------------------*
+FORM select_dvi.
+  TYPES: BEGIN OF ty_anep
+         , belnr LIKE anep-belnr
+         , anln1 LIKE anep-anln1
+         , anln2 LIKE anep-anln2
+         , invnr LIKE anla-invnr
+         , bukrs LIKE anla-bukrs
+         , anlkl LIKE anla-anlkl
+         , ktogr LIKE anla-ktogr
+         , afabe LIKE anep-afabe
+         , bwasl LIKE anep-bwasl
+         , budat_dv LIKE anek-budat
+         , anbtr LIKE anep-anbtr
+         , aufwv LIKE anea-aufwv
+         , aufwl LIKE anea-aufwl
+         , bwagrp LIKE tabw-bwagrp
+         , zeusi LIKE anlu-zeusi
+         , nzayav_eusi LIKE anlu-nzayav_eusi
+         , pzayav_eusi LIKE anlu-pzayav_eusi
+         , gjahr LIKE anep-gjahr
+         , xblnr LIKE anek-xblnr
+         , awtyp LIKE anek-awtyp
+         , aworg LIKE anek-aworg
+         , gitcol LIKE tabwg-gitcol
+         , bwatxt LIKE tabwt-bwatxt
+         , awkey LIKE bkpf-awkey
+         , END OF ty_anep.
+
+  TYPES: BEGIN OF ty_anlp
+          , peraf LIKE anlp-peraf
+          , afbnr LIKE anlp-afbnr
+          , anln1 LIKE anlp-anln1
+          , anln2 LIKE anlp-anln2
+          , afaber LIKE anlp-afaber
+          , nafaz LIKE anlp-nafaz
+          , safaz LIKE anlp-safaz
+          , aafaz LIKE anlp-aafaz
+          , belnr LIKE anlp-belnr
+          , invnr LIKE anla-invnr
+          , anlkl LIKE anla-anlkl
+          , ktogr LIKE anla-ktogr
+          , zeusi LIKE anlu-zeusi
+          , nzayav_eusi LIKE anlu-nzayav_eusi
+          , pzayav_eusi LIKE anlu-pzayav_eusi
+          , END OF ty_anlp
+          .
+  TYPES: BEGIN OF ty_bkpf_key
+       , gjahr LIKE anek-gjahr
+       , awtyp LIKE anek-awtyp
+       , awkey LIKE bkpf-awkey
+       , belnr LIKE bkpf-belnr
+       , END OF ty_bkpf_key
+       .
+  TYPES: BEGIN OF ty_anea
+       , anln1 LIKE anep-anln1
+       , anln2 LIKE anep-anln2
+       , afabe LIKE anep-afabe
+       , belnr LIKE anep-belnr
+       , aworg LIKE anek-aworg
+       , gjahr LIKE anep-gjahr
+       , xblnr LIKE anek-xblnr
+       , awtyp LIKE anek-awtyp
+       , anlkl LIKE anla-anlkl
+       , invnr LIKE anla-invnr
+       , ktogr LIKE anla-ktogr
+       , zeusi LIKE anlu-zeusi
+       , nzayav_eusi LIKE anlu-nzayav_eusi
+       , pzayav_eusi LIKE anlu-pzayav_eusi
+       , budat LIKE anek-budat
+       , bwasl LIKE anep-bwasl
+       , bwatxt LIKE tabwt-bwatxt
+       , nafav LIKE anea-nafav
+       , awkey LIKE bkpf-awkey
+       , END OF ty_anea
+       .
+  DATA: lt_anep TYPE STANDARD TABLE OF ty_anep
+      , ls_anep LIKE LINE OF lt_anep
+      .
+  DATA: lt_tabwt TYPE HASHED TABLE OF ztgft_tabwt WITH UNIQUE KEY bwasl
+      , ls_tabwt LIKE LINE OF lt_tabwt.
+
+  DATA: lt_anlp TYPE STANDARD TABLE OF ty_anlp
+      , ls_anlp LIKE LINE OF lt_anlp.
+
+
+  DATA: ls_out LIKE LINE OF gt_out_dv
+      , lt_bkey TYPE STANDARD TABLE OF ty_bkpf_key
+      , ls_bkey LIKE LINE OF lt_bkey
+      , lt_bkpf TYPE SORTED TABLE OF ty_bkpf_key WITH NON-UNIQUE KEY gjahr
+                                                                     awtyp awkey
+      , ls_bkpf LIKE LINE OF lt_bkpf
+      , lv_peraf(2)
+      , lt_anea TYPE STANDARD TABLE OF ty_anea
+      , ls_anea LIKE LINE OF lt_anea
+      , ls_afab_ok LIKE LINE OF gt_afab_ok
+      , lr_afab LIKE RANGE OF anea-afabe
+      , ls_afab LIKE LINE OF lr_afab
+      , lv_first_day TYPE d  " 15.05.2019 mvprokofyev 7700068784 ЕУСИ - 769
+      .
+  PERFORM refresh_all.
+  CONCATENATE p_gjahr '0101' INTO lv_first_day.   " 15.05.2019 mvprokofyev 7700068784 ЕУСИ - 769
+  SELECT * FROM ztgft_tabwt
+  INTO TABLE lt_tabwt." WHERE bwagrp LIKE '2%' .
+  IF NOT p_excl IS INITIAL.
+    DELETE lt_tabwt WHERE bwatxt = text-004. "Не используется в ЕУСИ
+  ENDIF.
+  LOOP AT gt_afab_ok INTO ls_afab_ok.
+    ls_afab = 'IEQ'.
+    ls_afab-low = ls_afab_ok.
+    APPEND ls_afab TO lr_afab.
+  ENDLOOP.
+  IF lr_afab IS INITIAL.
+    MESSAGE text-m03 TYPE 'S' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+  IF NOT lt_tabwt IS INITIAL.
+    SELECT p~belnr
+           p~anln1
+           p~anln2
+           a~invnr
+           a~bukrs
+           a~anlkl
+           a~ktogr
+           p~afabe
+           p~bwasl
+           k~budat AS budat_dv
+           p~anbtr
+           e~aufwv
+           e~aufwl
+           t~bwagrp
+           u~zeusi
+           u~nzayav_eusi
+           u~pzayav_eusi
+           p~gjahr
+           k~xblnr
+           k~awtyp
+           k~aworg
+           g~gitcol
+           tt~bwatxt
+        FROM anek AS k
+        JOIN anla AS a ON
+            a~anln1 = k~anln1
+        AND a~anln2 = k~anln2
+        AND a~bukrs = k~bukrs
+        JOIN anep AS p ON
+            k~anln1 = p~anln1
+        AND k~anln2 = p~anln2
+        AND k~gjahr = p~gjahr
+        AND k~lnran = p~lnran
+        AND k~bukrs = p~bukrs
+        JOIN tabw AS t ON
+          t~bwasl = p~bwasl
+        LEFT JOIN tabwt AS tt ON
+          tt~bwasl = p~bwasl
+        AND tt~spras = sy-langu
+        JOIN tabwg AS g ON
+          t~bwagrp = g~bwagrp
+        LEFT JOIN anlu AS u ON
+            u~anln1 = a~anln1
+        AND u~anln2 = a~anln2
+        AND u~bukrs = a~bukrs
+       LEFT JOIN anea AS e ON
+           e~anln1 = p~anln1
+       AND e~anln2 = p~anln2
+       AND e~gjahr = p~gjahr
+       AND e~lnran = p~lnran
+       AND e~afabe = p~afabe
+       AND e~zujhr = p~zujhr
+       AND e~zucod = p~zucod
+       AND e~bukrs = p~bukrs
+       INTO TABLE lt_anep
+       FOR ALL ENTRIES IN lt_tabwt
+       WHERE p~bukrs EQ p_bukrs
+       AND p~anln1 IN so_anln1
+       AND p~anln2 IN so_anln2
+       AND p~gjahr EQ p_gjahr
+       AND p~afabe IN lr_afab
+       AND p~bwasl = lt_tabwt-bwasl
+       AND k~budat IN gr_bdatu
+       AND a~anlkl IN so_anlkl
+       AND ( a~deakt = '00000000' OR a~deakt BETWEEN lv_first_day AND '99991231' ).
+    DELETE lt_anep WHERE NOT ( zeusi IN so_eusi AND nzayav_eusi IN so_nzay ).
+    DELETE lt_anep WHERE ( gitcol  = 7 OR gitcol = 6 ).
+
+    TYPES: BEGIN OF ty_t095
+         , ktogr LIKE t095-ktogr
+         , afabe LIKE t095-afabe
+         , ktansw LIKE t095-ktansw
+         , END OF ty_t095
+         .
+    DATA: lt_t095 TYPE SORTED TABLE OF ty_t095 WITH NON-UNIQUE KEY ktogr afabe
+        , ls_t095 LIKE LINE OF lt_t095
+        .
+    IF NOT lt_anep[] IS INITIAL.
+      SELECT DISTINCT ktogr afabe ktansw
+        FROM t095
+        INTO TABLE lt_t095
+        FOR ALL ENTRIES IN lt_anep
+        WHERE ktogr = lt_anep-ktogr
+        AND ktopl = c_afapl
+        AND afabe = lt_anep-afabe.
+    ENDIF.
+  ENDIF.
+  SELECT p~peraf
+         p~afbnr
+         p~anln1
+         p~anln2
+         p~afaber
+         p~nafaz
+         p~safaz
+         p~aafaz
+         p~belnr
+         a~invnr
+         a~anlkl
+         a~ktogr
+         u~zeusi
+         u~nzayav_eusi
+         u~pzayav_eusi
+FROM anlp AS p
+JOIN anla AS a ON
+     a~anln1 = p~anln1
+AND a~anln2 = p~anln2
+AND a~bukrs = p~bukrs
+LEFT JOIN anlu AS u ON
+    u~anln1 = a~anln1
+AND u~anln2 = a~anln2
+AND u~bukrs = a~bukrs
+INTO TABLE lt_anlp
+WHERE p~bukrs = p_bukrs
+AND p~gjahr = p_gjahr
+AND p~peraf IN so_from
+AND p~anln1 IN so_anln1
+AND p~anln2 IN so_anln2
+AND p~afaber IN lr_afab
+AND a~anlkl IN so_anlkl
+AND p~gsber IN so_gsber
+AND ( a~deakt = '00000000' OR a~deakt BETWEEN lv_first_day AND '99991231' ).
+  DELETE lt_anlp WHERE NOT ( zeusi IN so_eusi AND nzayav_eusi IN so_nzay ).
+  IF NOT lt_anlp IS INITIAL.
+    TYPES: BEGIN OF ty_t095b
+      , ktogr LIKE t095b-ktogr
+      , afabe LIKE t095b-afabe
+      , ktnafb LIKE t095b-ktnafb
+      , END OF ty_t095b
+      .
+    DATA: lt_t095b TYPE SORTED TABLE OF ty_t095b WITH NON-UNIQUE KEY ktogr afabe
+        , ls_t095b LIKE LINE OF lt_t095b
+        .
+
+    SELECT DISTINCT ktogr afabe ktnafb
+       FROM t095b
+       INTO TABLE lt_t095b
+       FOR ALL ENTRIES IN lt_anlp
+       WHERE ktogr = lt_anlp-ktogr
+       AND ktopl = c_afapl
+       AND afabe = lt_anlp-afaber.
+
+    SELECT p~anln1
+           p~anln2
+           p~afabe
+           p~belnr
+           k~aworg
+           p~gjahr
+           k~xblnr
+           k~awtyp
+           a~anlkl
+           a~invnr
+           a~ktogr
+           u~zeusi
+           u~nzayav_eusi
+           u~pzayav_eusi
+           k~budat
+           p~bwasl
+           tt~bwatxt
+           e~nafav
+     FROM anep AS p
+     JOIN anea AS e ON
+         e~bukrs = p~bukrs
+     AND e~anln1 = p~anln1
+     AND e~anln2 = p~anln2
+     AND e~gjahr = p~gjahr
+     AND e~lnran = p~lnran
+     AND e~afabe = p~afabe
+     AND e~zujhr = p~zujhr
+     AND e~zucod = p~zucod
+     JOIN anek AS k ON
+         k~anln1 = p~anln1
+     AND k~anln2 = p~anln2
+     AND k~gjahr = p~gjahr
+     AND k~lnran = p~lnran
+     AND k~bukrs = p~bukrs
+     JOIN anla AS a ON
+         a~anln1 = p~anln1
+     AND a~anln2 = p~anln2
+     AND a~bukrs = p~bukrs
+     LEFT JOIN anlu AS u ON
+         u~anln1 = a~anln1
+     AND u~anln2 = a~anln2
+     AND u~bukrs = a~bukrs
+     LEFT JOIN tabwt AS tt ON
+          tt~bwasl = p~bwasl
+     AND tt~spras = sy-langu
+     INTO TABLE lt_anea
+     FOR ALL ENTRIES IN lt_anlp
+     WHERE p~bukrs = p_bukrs
+     AND p~gjahr = p_gjahr
+     AND p~anln1 = lt_anlp-anln1
+     AND p~anln2 = lt_anlp-anln2
+     AND p~afabe = lt_anlp-afaber
+     AND p~xantw <> space
+     AND p~lnsan = space
+     AND e~zujhr = '0000'
+     AND e~zucod = '0000'
+     AND ( a~deakt = '00000000' OR a~deakt BETWEEN lv_first_day AND '99991231' )
+     AND k~budat BETWEEN  gs_bdatu-low AND gs_bdatu-high.
+    DELETE lt_anea WHERE nafav IS NOT INITIAL.
+    DELETE lt_anea WHERE NOT ( zeusi IN so_eusi AND nzayav_eusi IN so_nzay ).
+    IF NOT lt_anea IS INITIAL.
+      SORT lt_anea.
+      DATA: lt_t095ba TYPE SORTED TABLE OF ty_t095b WITH NON-UNIQUE KEY ktogr afabe
+          , ls_t095ba LIKE LINE OF lt_t095b
+          .
+      SELECT DISTINCT ktogr afabe ktnafb
+         FROM t095b
+         INTO TABLE lt_t095ba
+         FOR ALL ENTRIES IN lt_anea
+         WHERE ktogr = lt_anea-ktogr
+         AND ktopl = c_afapl
+         AND afabe = lt_anea-afabe.
+    ENDIF.
+  ENDIF.
+
+  LOOP AT lt_anep INTO ls_anep.
+    CONCATENATE ls_anep-belnr ls_anep-aworg INTO ls_anep-awkey.
+    CHECK NOT ls_anep-awkey IS INITIAL.
+    MODIFY lt_anep FROM ls_anep TRANSPORTING awkey.
+    ls_bkey-gjahr = ls_anep-gjahr.
+    ls_bkey-awtyp = ls_anep-awtyp.
+    ls_bkey-awkey = ls_anep-awkey.
+    APPEND ls_bkey TO lt_bkey.
+  ENDLOOP.
+
+
+  LOOP AT lt_anea INTO ls_anea.
+    CONCATENATE ls_anea-belnr ls_anea-aworg INTO ls_anea-awkey.
+    CHECK NOT ls_anea-awkey IS INITIAL.
+    MODIFY lt_anea FROM ls_anea TRANSPORTING awkey.
+    ls_bkey-gjahr = ls_anea-gjahr.
+    ls_bkey-awtyp = ls_anea-awtyp.
+    ls_bkey-awkey = ls_anea-awkey.
+    APPEND ls_bkey TO lt_bkey.
+  ENDLOOP.
+
+  IF NOT lt_bkey IS INITIAL.
+    SELECT gjahr
+           awtyp
+           awkey
+           belnr
+   FROM bkpf
+   INTO TABLE lt_bkpf
+   FOR ALL ENTRIES IN lt_bkey
+   WHERE bukrs = p_bukrs
+   AND gjahr = lt_bkey-gjahr
+   AND awtyp = lt_bkey-awtyp
+   AND awkey = lt_bkey-awkey.
+  ENDIF.
+
+  LOOP AT lt_anep INTO ls_anep.
+    CLEAR: ls_bkpf, ls_tabwt, ls_t095.
+    READ TABLE lt_bkpf INTO ls_bkpf WITH KEY gjahr = ls_anep-gjahr
+                                             awtyp = ls_anep-awtyp
+                                             awkey = ls_anep-awkey.
+    ls_out-belnr = ls_bkpf-belnr.
+    ls_out-anln1 = ls_anep-anln1.
+    ls_out-anln2 = ls_anep-anln2.
+    ls_out-invnr = ls_anep-invnr.
+    ls_out-bukrs = ls_anep-bukrs.
+    CASE ls_anep-afabe.
+      WHEN c_bu.
+        ls_out-rakurs = c_sbu.
+      WHEN c_nu.
+        ls_out-rakurs = c_snu.
+      WHEN c_msfo.
+        ls_out-rakurs = c_smsfo.
+      WHEN c_eko.
+        ls_out-rakurs = c_seko.
+    ENDCASE.
+    ls_out-anlkl = ls_anep-anlkl.
+    ls_out-budat = ls_anep-budat_dv.
+    ls_out-summa = ls_anep-anbtr + ls_anep-aufwv + ls_anep-aufwl.
+    ls_out-begda = gs_bdatu-low.
+    ls_out-endda = gs_bdatu-high.
+    ls_out-bwasl = ls_anep-bwasl.
+    ls_out-bwatxt = ls_anep-bwatxt.
+    IF  ls_out-bwatxt = text-003.
+      ls_out-bwatxt1 = ls_out-bwatxt.
+    ELSE.
+      READ TABLE lt_tabwt INTO ls_tabwt WITH KEY bwasl = ls_anep-bwasl.
+      ls_out-bwatxt1 = ls_tabwt-bwatxt.
+    ENDIF.
+    ls_out-zeusi = ls_anep-zeusi.
+    ls_out-nzayav_eusi = ls_anep-nzayav_eusi.
+    ls_out-pzayav_eusi = ls_anep-pzayav_eusi.
+
+    READ TABLE lt_t095 INTO ls_t095 WITH TABLE KEY ktogr = ls_anep-ktogr
+                                                   afabe = ls_anep-afabe.
+    ls_out-hkont_lus = ls_t095-ktansw.
+    APPEND ls_out TO gt_out_dv. CLEAR ls_out.
+  ENDLOOP.
+
+  LOOP AT lt_anlp INTO ls_anlp.
+    ls_out-belnr =  ls_anlp-belnr.
+    ls_out-invnr =  ls_anlp-invnr.
+    ls_out-anln1 =  ls_anlp-anln1.
+    ls_out-anln2 =  ls_anlp-anln2.
+    ls_out-bukrs = p_bukrs.
+    CASE ls_anlp-afaber.
+      WHEN c_bu.
+        ls_out-rakurs = c_sbu.
+      WHEN c_nu.
+        ls_out-rakurs = c_snu.
+      WHEN c_msfo.
+        ls_out-rakurs = c_smsfo.
+      WHEN c_eko.
+        ls_out-rakurs = c_seko.
+    ENDCASE.
+    ls_out-anlkl = ls_anlp-anlkl.
+
+    lv_peraf = ls_anlp-peraf+1(2).
+    IF lv_peraf > c_entire_y.
+      lv_peraf = c_entire_y.
+    ENDIF.
+    CONCATENATE p_gjahr lv_peraf '01' INTO ls_out-budat.
+    CALL FUNCTION 'SG_PS_GET_LAST_DAY_OF_MONTH'
+      EXPORTING
+        day_in            = ls_out-budat
+      IMPORTING
+        last_day_of_month = ls_out-budat
+      EXCEPTIONS
+        day_in_not_valid  = 1
+        OTHERS            = 2.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+    ls_out-summa = ls_anlp-nafaz + ls_anlp-safaz + ls_anlp-aafaz." + ls_anea-nafav.
+    ls_out-begda = gs_bdatu-low.
+    ls_out-endda = gs_bdatu-low.
+    ls_out-bwatxt1 = ls_out-bwatxt = text-003. "Амортизация
+    ls_out-zeusi = ls_anlp-zeusi.
+    ls_out-nzayav_eusi = ls_anlp-nzayav_eusi.
+    ls_out-pzayav_eusi = ls_anlp-pzayav_eusi.
+    CLEAR: ls_t095b.
+    READ TABLE lt_t095b INTO ls_t095b WITH TABLE KEY ktogr = ls_anlp-ktogr
+                                                     afabe = ls_anlp-afaber.
+    ls_out-hkont_lus = ls_t095b-ktnafb.
+    APPEND ls_out TO gt_out_dv. CLEAR ls_out.
+  ENDLOOP.
+  LOOP AT lt_anea INTO ls_anea.
+    CLEAR: ls_bkpf, ls_tabwt, ls_t095ba.
+    READ TABLE lt_bkpf INTO ls_bkpf WITH KEY gjahr = ls_anea-gjahr
+                                             awtyp = ls_anea-awtyp
+                                             awkey = ls_anea-awkey.
+    ls_out-belnr = ls_bkpf-belnr.
+    ls_out-anln1 = ls_anea-anln1.
+    ls_out-anln2 = ls_anea-anln2.
+    ls_out-invnr = ls_anea-invnr.
+    ls_out-bukrs = p_bukrs.
+    CASE ls_anea-afabe.
+      WHEN c_bu.
+        ls_out-rakurs = c_sbu.
+      WHEN c_nu.
+        ls_out-rakurs = c_snu.
+      WHEN c_msfo.
+        ls_out-rakurs = c_smsfo.
+      WHEN c_eko.
+        ls_out-rakurs = c_seko.
+    ENDCASE.
+    ls_out-anlkl = ls_anea-anlkl.
+    ls_out-budat = ls_anea-budat.
+    ls_out-summa = ls_anea-nafav.
+    ls_out-begda = gs_bdatu-low.
+    ls_out-endda = gs_bdatu-high.
+    ls_out-bwasl = ls_anea-bwasl.
+    ls_out-bwatxt = ls_anea-bwatxt.
+    IF ls_out-bwatxt = text-003.
+      ls_out-bwatxt1 = ls_out-bwatxt.
+    ELSE.
+      READ TABLE lt_tabwt INTO ls_tabwt WITH KEY bwasl = ls_anea-bwasl.
+      ls_out-bwatxt1 = ls_tabwt-bwatxt.
+    ENDIF.
+    ls_out-zeusi = ls_anea-zeusi.
+    ls_out-nzayav_eusi = ls_anea-nzayav_eusi.
+    ls_out-pzayav_eusi = ls_anea-pzayav_eusi.
+
+    READ TABLE lt_t095ba INTO ls_t095ba WITH TABLE KEY ktogr = ls_anea-ktogr
+                                                       afabe = ls_anea-afabe.
+    ls_out-hkont_lus = ls_t095ba-ktnafb.
+    APPEND ls_out TO gt_out_dv. CLEAR ls_out.
+  ENDLOOP.
+  ASSIGN gt_out_dv TO <gt_out>.
+ENDFORM.                    " SELECT_DVI
+
+*&---------------------------------------------------------------------*
+*&      Form  h_dclick
+*&---------------------------------------------------------------------*
+FORM h_dclick USING p_row TYPE lvc_s_row
+                               p_column TYPE lvc_s_col.
+  FIELD-SYMBOLS: <ls_out>, <field>, <anln2>.
+  READ TABLE <gt_out> ASSIGNING <ls_out> INDEX p_row.
+  CHECK sy-subrc EQ 0.
+  CASE p_column.
+    WHEN 'ANLN1'.
+      ASSIGN COMPONENT p_column OF STRUCTURE <ls_out> TO <field>.
+      ASSIGN COMPONENT 'ANLN2' OF STRUCTURE <ls_out> TO <anln2>.
+      SET PARAMETER ID 'AN1' FIELD <field>.
+      SET PARAMETER ID 'AN2' FIELD <anln2>.
+      SET PARAMETER ID 'BUK' FIELD p_bukrs.
+      CALL TRANSACTION 'AS03' AND SKIP FIRST SCREEN.
+  ENDCASE.
+ENDFORM.                    " h_dclick
+*&---------------------------------------------------------------------*
+*&      Form  SELECT_CON
+*&---------------------------------------------------------------------*
+FORM select_con .
+  TYPES: BEGIN OF ty_out
+       , bukrs LIKE anla-bukrs
+       , anln1 LIKE anep-anln1
+       , anln2 LIKE anep-anln2
+       , anlkl LIKE anla-anlkl
+       , zeusi LIKE anlu-zeusi
+       , nzayav_eusi LIKE anlu-nzayav_eusi
+       , pzayav_eusi LIKE anlu-pzayav_eusi
+       , invnr  LIKE anla-invnr
+       , END OF ty_out.
+
+  DATA: lt_out TYPE STANDARD TABLE OF ty_out
+      , ls_out LIKE LINE OF lt_out
+      , lv_todat TYPE sy-datum
+      , ls_gout LIKE LINE OF gt_out_cn
+      , lv_a_sum  TYPE tslvt
+      , lv_o_sum  TYPE tslvt
+      , lv_dd_sum TYPE tslvt
+      , lv_tt_sum TYPE tslvt
+      , lv_first_day TYPE d
+      .
+  CONCATENATE p_gjahr '0101' INTO lv_first_day.
+
+  IF gs_bdatu-high IS INITIAL.
+    lv_todat = gs_bdatu-low.
+  ELSE.
+    lv_todat = gs_bdatu-high.
+  ENDIF.
+
+  SELECT a~bukrs
+         a~anln1
+         a~anln2
+         a~anlkl
+         u~zeusi
+         u~nzayav_eusi
+         u~pzayav_eusi
+         a~invnr
+  FROM anla AS a
+  LEFT JOIN anlu AS u ON
+      a~anln1 = u~anln1
+  AND a~anln2 = u~anln2
+  AND a~bukrs = u~bukrs
+  INTO TABLE lt_out
+  WHERE a~bukrs EQ p_bukrs
+  AND   a~anlkl IN so_anlkl
+  AND   a~anln1 IN so_anln1
+  AND   a~anln2 IN so_anln2
+  AND ( a~zugdt LE lv_todat AND a~zugdt NE '00000000')
+  AND ( a~deakt = '00000000' OR a~deakt BETWEEN lv_first_day AND '99991231' ).
+  DELETE lt_out WHERE NOT ( zeusi IN so_eusi AND nzayav_eusi IN so_nzay ).
+  LOOP AT lt_out INTO ls_out.
+    MOVE-CORRESPONDING ls_out TO ls_gout.
+    afab_auth c_bu.
+    IF sy-subrc EQ 0.
+      PERFORM calc_cost USING p_bukrs
+                              gs_bdatu-high
+                              ls_out-anln1
+                              ls_out-anln2
+                              c_bu
+                     CHANGING lv_a_sum
+                              lv_o_sum
+                              lv_dd_sum
+                              lv_tt_sum.
+      ls_gout-stoim = lv_a_sum.
+      ls_gout-amort_nakop = lv_dd_sum.
+      ls_gout-rakurs = c_sbu.
+      ls_gout-ost_stoim = lv_tt_sum.
+      COLLECT ls_gout INTO gt_out_cn.
+      APPEND ls_gout TO gt_out_cn_all.
+    ENDIF.
+    afab_auth c_msfo.
+    IF sy-subrc EQ 0.
+      PERFORM calc_cost USING p_bukrs
+                           gs_bdatu-high
+                           ls_out-anln1
+                           ls_out-anln2
+                           c_msfo
+                  CHANGING lv_a_sum
+                           lv_o_sum
+                           lv_dd_sum
+                           lv_tt_sum .
+      ls_gout-stoim = lv_a_sum.
+      ls_gout-amort_nakop = lv_dd_sum.
+      ls_gout-rakurs = c_smsfo.
+      ls_gout-ost_stoim = lv_tt_sum.
+      COLLECT ls_gout INTO gt_out_cn.
+      APPEND ls_gout TO gt_out_cn_all.
+    ENDIF.
+    afab_auth c_nu.
+    IF sy-subrc EQ 0.
+      PERFORM calc_cost USING p_bukrs
+                              gs_bdatu-high
+                              ls_out-anln1
+                              ls_out-anln2
+                              c_nu
+                     CHANGING lv_a_sum
+                              lv_o_sum
+                              lv_dd_sum
+                              lv_tt_sum .
+      ls_gout-stoim = lv_a_sum.
+      ls_gout-amort_nakop = lv_dd_sum.
+      ls_gout-ost_stoim = lv_tt_sum.
+      ls_gout-rakurs = c_snu.
+      COLLECT ls_gout INTO gt_out_cn.
+      APPEND ls_gout TO gt_out_cn_all.
+    ENDIF.
+    CLEAR ls_gout.
+  ENDLOOP.
+  ASSIGN gt_out_cn TO <gt_out>.
+ENDFORM.                    " SELECT_CON
+*&---------------------------------------------------------------------*
+*&      Form  INIT_SCREEN_GLOBALS
+*&---------------------------------------------------------------------*
+FORM init_screen_globals .
+  SELECT SINGLE land1 butxt
+    FROM t001 INTO (gv_land, gv_butxt)
+     WHERE bukrs = p_bukrs.
+  gv_repdate = sy-datum.
+ENDFORM.                    " INIT_SCREEN_GLOBALS
+*&---------------------------------------------------------------------*
+*&      Form  INIT_DATES
+*&---------------------------------------------------------------------*
+FORM init_dates.
+  CLEAR: gr_bdatu, gv_startdate.
+  LOOP AT so_from.
+    gs_bdatu-sign = so_from-sign.
+    gs_bdatu-option = 'BT'.
+    CONCATENATE p_gjahr so_from-low '01' INTO gs_bdatu-low.
+    IF so_from-high IS INITIAL.
+      CONCATENATE p_gjahr so_from-low '01' INTO gs_bdatu-high.
+    ELSE .
+      CONCATENATE p_gjahr so_from-high '01' INTO gs_bdatu-high.
+    ENDIF.
+    CALL FUNCTION 'SG_PS_GET_LAST_DAY_OF_MONTH'
+      EXPORTING
+        day_in            = gs_bdatu-high
+      IMPORTING
+        last_day_of_month = gs_bdatu-high
+      EXCEPTIONS
+        day_in_not_valid  = 1
+        OTHERS            = 2.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+    APPEND gs_bdatu TO gr_bdatu.
+  ENDLOOP.
+  gv_startdate = gs_bdatu-low.
+ENDFORM.                    " INIT_DATES
+*&---------------------------------------------------------------------*
+*&      Form  UPLOAD
+*&---------------------------------------------------------------------*
+FORM upload.
+  CONSTANTS: lc_begin_row TYPE i VALUE 3
+           , lc_begin_col TYPE i VALUE 1
+           , lc_end_row TYPE i VALUE 65535
+           , lc_end_col TYPE i VALUE 29
+           , lc_step TYPE i VALUE 10000
+           .
+
+  DATA: lt_xls TYPE TABLE OF zscmn_alsmex_tabline
+      , ls_xls LIKE LINE OF lt_xls
+      , lv_row TYPE i
+      , lv_col TYPE alsmex_tabline-col
+      , lv_text(50)
+      , lv_row_err TYPE i
+      , lt_map TYPE th_hmap
+      , ls_map LIKE LINE OF lt_map
+      , ld_wa TYPE REF TO data
+      , lv_fname TYPE string
+      , lt_centr TYPE HASHED TABLE OF ztgft_eusi_centr WITH UNIQUE KEY bukrs_c bukrs_t
+      , lv_last_row  TYPE string.
+  DATA: lv_begin_row TYPE i
+        , lv_end_row TYPE i
+        .
+  FIELD-SYMBOLS: <lv_field> TYPE ANY
+               , <ls_wa> TYPE ANY
+               .
+
+  SELECT * FROM ztgft_eusi_centr
+  INTO TABLE lt_centr
+  WHERE bukrs_t = p_bukrs.
+
+  lv_fname = p_file.
+  PERFORM get_last_row USING lv_fname
+                    CHANGING lv_last_row.
+  CASE abap_true.
+    WHEN ch_rek.
+      CREATE DATA ld_wa LIKE LINE OF gt_rek.
+      ASSIGN gt_rek TO <gt_out>.
+      lv_begin_row = 3.
+    WHEN ch_doo.
+      CREATE DATA ld_wa LIKE LINE OF gt_doo.
+      ASSIGN gt_doo TO <gt_out>.
+    WHEN ch_nma.
+      CREATE DATA ld_wa LIKE LINE OF gt_nma.
+      ASSIGN gt_nma TO <gt_out>.
+  ENDCASE.
+  DATA: lv_cnt TYPE i.
+  IF lv_last_row > lc_step.
+    lv_cnt = lv_last_row DIV lc_step + 1 .
+  ELSE.
+    lv_cnt = 1.
+  ENDIF.
+
+  PERFORM prepare_map CHANGING lt_map.
+
+  lv_end_row = lv_begin_row + lc_step.
+
+  DO lv_cnt TIMES.
+    CLEAR: lt_xls.
+
+    CALL FUNCTION 'ZALSM_EXCEL_TO_INTERNAL_TABLE2'
+      EXPORTING
+        i_filename              = lv_fname
+        i_begin_col             = lc_begin_col
+        i_begin_row             = lv_begin_row
+        i_end_col               = lc_end_col
+        i_end_row               = lv_end_row
+      TABLES
+        intern                  = lt_xls[]
+      EXCEPTIONS
+        inconsistent_parameters = 1
+        upload_ole              = 2
+        OTHERS                  = 3.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ELSE.
+      ADD lc_step TO lv_begin_row.
+      ADD lc_step TO lv_end_row.
+    ENDIF.
+
+    ASSIGN ld_wa->* TO <ls_wa>.
+
+    SORT lt_xls BY row col.
+
+    LOOP AT lt_xls INTO ls_xls.
+      AT NEW row.
+        CLEAR <ls_wa>.
+      ENDAT.
+      IF ls_xls-row = 1.
+*      MOVE-CORRESPONDING ls_xls TO ls_map.
+*      INSERT ls_map INTO TABLE lt_map. CLEAR ls_map.
+        CONTINUE.
+*    ELSEIF ls_xls-row = 2.
+*      CONTINUE.
+      ELSE.
+        CLEAR ls_map.
+        IF ch_rek IS NOT INITIAL.
+          IF ls_xls-col < 8.
+            READ TABLE lt_map INTO ls_map WITH KEY col = ls_xls-col.
+            ASSIGN COMPONENT ls_map-value OF STRUCTURE <ls_wa> TO <lv_field>.
+            IF sy-subrc EQ 0.
+              <lv_field> = ls_xls-value.
+            ENDIF.
+          ENDIF.
+        ELSE.
+          READ TABLE lt_map INTO ls_map WITH KEY col = ls_xls-col.
+          ASSIGN COMPONENT ls_map-value OF STRUCTURE <ls_wa> TO <lv_field>.
+          IF sy-subrc EQ 0.
+            <lv_field> = ls_xls-value.
+          ENDIF.
+        ENDIF.
+      ENDIF.
+      AT END OF row .
+        UNASSIGN <lv_field>.
+        ASSIGN COMPONENT 'BUKRS' OF STRUCTURE <ls_wa> TO <lv_field>.
+        READ TABLE lt_centr WITH TABLE KEY bukrs_c = <lv_field>
+                                           bukrs_t = p_bukrs TRANSPORTING NO FIELDS.
+
+        CHECK sy-subrc EQ 0.
+        UNASSIGN <lv_field>.
+        IF ch_rek EQ abap_true.
+          ASSIGN COMPONENT 'ANLN1' OF STRUCTURE <ls_wa> TO <lv_field>.
+          CHECK <lv_field> IS NOT INITIAL.
+        ENDIF.
+        APPEND <ls_wa> TO <gt_out>. CLEAR <ls_wa>.
+      ENDAT .
+    ENDLOOP.
+  ENDDO.
+  IF <gt_out>[] IS INITIAL .
+    MESSAGE 'Данные не загружены!' TYPE 'E' .
+  ENDIF.
+ENDFORM.                    " UPLOAD
+
+*&---------------------------------------------------------------------*
+*&      Form  upload_nma
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM upload_nma CHANGING ch_map TYPE thy_map.
+  CONSTANTS: lc_begin_row TYPE i VALUE 1
+          , lc_begin_col TYPE i VALUE 1
+          , lc_end_row TYPE i VALUE 65535
+          , lc_end_col TYPE i VALUE 29.
+
+  DATA: lt_xls TYPE TABLE OF zscmn_alsmex_tabline
+      , ls_xls LIKE LINE OF lt_xls
+      , lv_row TYPE i
+      , lv_col TYPE alsmex_tabline-col
+      , lv_text(50)
+      , lv_row_err TYPE i
+      , lt_map TYPE thy_map
+      , lt_mapt TYPE thy_map
+      , ls_map LIKE LINE OF lt_map
+      , ls_mapt LIKE LINE OF lt_map
+      , ld_wa TYPE REF TO data
+      , lv_fname TYPE string
+      .
+
+  FIELD-SYMBOLS: <lv_field> TYPE ANY
+               , <ls_wa> TYPE ANY
+               .
+  lv_fname = p_file.
+  CLEAR ch_map.
+  CALL FUNCTION 'ZALSM_EXCEL_TO_INTERNAL_TABLE2'
+    EXPORTING
+      i_filename              = lv_fname
+      i_begin_col             = lc_begin_col
+      i_begin_row             = lc_begin_row
+      i_end_col               = lc_end_col
+      i_end_row               = lc_end_row
+    TABLES
+      intern                  = lt_xls[]
+    EXCEPTIONS
+      inconsistent_parameters = 1
+      upload_ole              = 2
+      OTHERS                  = 3.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+  IF lt_xls[] IS INITIAL .
+    MESSAGE 'Данные не загружены!' TYPE 'E' .
+  ENDIF.
+
+
+  CREATE DATA ld_wa LIKE LINE OF gt_doo.
+  ASSIGN gt_doo TO <gt_out>.
+
+  ASSIGN ld_wa->* TO <ls_wa>.
+
+  SORT lt_xls BY row col.
+
+  LOOP AT lt_xls INTO ls_xls.
+    AT NEW row.
+      CLEAR <ls_wa>.
+    ENDAT.
+    IF ls_xls-row = 1.
+      MOVE-CORRESPONDING ls_xls TO ls_map.
+      INSERT ls_map INTO TABLE lt_mapt. CLEAR ls_map.
+      CONTINUE.
+    ELSEIF ls_xls-row = 2.
+      CONTINUE.
+    ELSEIF ls_xls-row = 3.
+      MOVE-CORRESPONDING ls_xls TO ls_map.
+      INSERT ls_map INTO TABLE lt_map. CLEAR ls_map.
+      CONTINUE.
+    ELSE.
+      CLEAR ls_map.
+      READ TABLE lt_map INTO ls_map WITH KEY col = ls_xls-col.
+      ASSIGN COMPONENT ls_map-value OF STRUCTURE <ls_wa> TO <lv_field>.
+      IF sy-subrc EQ 0.
+        <lv_field> = ls_xls-value.
+      ENDIF.
+    ENDIF.
+    AT END OF row .
+      UNASSIGN <lv_field>.
+      ASSIGN COMPONENT 'BUKRS' OF STRUCTURE <ls_wa> TO <lv_field>.
+      CHECK <lv_field> EQ p_bukrs.
+      UNASSIGN <lv_field>.
+      APPEND <ls_wa> TO <gt_out>. CLEAR <ls_wa>.
+    ENDAT .
+  ENDLOOP.
+  LOOP AT lt_map INTO ls_map.
+    READ TABLE lt_mapt INTO ls_mapt WITH KEY col = ls_map-col.
+    ls_map-text = ls_mapt-value.
+    INSERT ls_map INTO TABLE ch_map. CLEAR ls_map.
+  ENDLOOP.
+ENDFORM.                    "upload_nma
+
+*&---------------------------------------------------------------------*
+*&      Form  CHECK_FILLED
+*&---------------------------------------------------------------------*
+FORM check_filled USING p_field TYPE any.
+  CHECK p_field IS INITIAL.
+  MESSAGE 'Поле обязательное для заполнения!' TYPE 'E'.
+ENDFORM.                    " CHECK_FILLED
+*&---------------------------------------------------------------------*
+*&      Form  DVAL_READ
+*&---------------------------------------------------------------------*
+FORM dval_read USING p_fname TYPE dynpread-fieldname
+               CHANGING c_flag TYPE flag.
+  DATA: lt_dfls TYPE STANDARD TABLE OF dynpread
+      , ls_dfls LIKE LINE OF lt_dfls
+      , lv_dynnr TYPE d020s-dnum VALUE '1000'
+      .
+
+  CLEAR c_flag.
+  ls_dfls-fieldname  = p_fname.
+  APPEND ls_dfls TO lt_dfls. CLEAR ls_dfls.
+
+  CALL FUNCTION 'DYNP_VALUES_READ'
+    EXPORTING
+      dyname               = sy-repid
+      dynumb               = lv_dynnr
+    TABLES
+      dynpfields           = lt_dfls
+    EXCEPTIONS
+      invalid_abapworkarea = 1
+      invalid_dynprofield  = 2
+      invalid_dynproname   = 3
+      invalid_dynpronummer = 4
+      invalid_request      = 5
+      no_fielddescription  = 6
+      invalid_parameter    = 7
+      undefind_error       = 8
+      double_conversion    = 9
+      stepl_not_found      = 10
+      OTHERS               = 11.
+  IF sy-subrc = 0.
+    LOOP AT lt_dfls INTO ls_dfls.
+      c_flag = ls_dfls-fieldvalue.
+      EXIT.
+    ENDLOOP.
+  ELSE.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+         WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+ENDFORM.                    " DVAL_READ
+*&---------------------------------------------------------------------*
+*&      Form  SET_FILE
+*&---------------------------------------------------------------------*
+FORM set_file CHANGING c_file.
+  DATA: lv_desktop_directory TYPE string
+      , lt_filetable TYPE filetable
+      , ls_filetable LIKE LINE OF lt_filetable
+      , lv_filter TYPE string VALUE  'Файлы EXCEL (*.xlsx)|*.xlsx|Файлы EXCEL (*.xls)|*.xls|Все файлы (*.*)|*.*|'
+      , lv_rc TYPE i
+      .
+  CLEAR c_file.
+  cl_gui_frontend_services=>get_desktop_directory( CHANGING desktop_directory = lv_desktop_directory ).
+  cl_gui_cfw=>flush( EXCEPTIONS
+                      cntl_system_error = 1
+                      cntl_error        = 2
+                      OTHERS            = 3 ).
+
+  cl_gui_frontend_services=>file_open_dialog(
+    EXPORTING
+      window_title      = 'Выберите файл'
+      file_filter       = lv_filter
+      multiselection    = abap_false
+      initial_directory = lv_desktop_directory
+    CHANGING
+      file_table        = lt_filetable[]
+      rc                = lv_rc ).
+
+  CHECK lt_filetable[] IS NOT INITIAL .
+  LOOP AT lt_filetable INTO ls_filetable.
+    c_file = ls_filetable .
+  ENDLOOP.
+ENDFORM.                    " SET_FILE
+
+
+*&---------------------------------------------------------------------*
+*&      Form  check_file_exists
+*&---------------------------------------------------------------------*
+FORM check_file_exists CHANGING c_file.
+  DATA: lv_file TYPE string  .
+  DATA: lv_result TYPE abap_bool .
+  lv_file = c_file .
+  cl_gui_frontend_services=>file_exist(
+    EXPORTING
+      file   = lv_file
+    RECEIVING
+      result = lv_result ).
+  IF lv_result EQ abap_false .
+    CLEAR c_file .
+    MESSAGE 'Введите действительное имя файла' TYPE 'S' DISPLAY LIKE 'E' .
+    STOP.
+  ENDIF.
+ENDFORM.                    " CHECK_FILE_EXISTS
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_REK
+*&---------------------------------------------------------------------*
+FORM process_rek .
+  TYPES: BEGIN OF ty_anla
+       , anln1 TYPE anla-anln1
+       , anln2 TYPE anla-anln2
+       , zeusi TYPE anlu-zeusi
+       , END OF ty_anla
+       .
+  DATA: lt_anla TYPE SORTED TABLE OF ty_anla WITH UNIQUE KEY anln1 anln2
+      , ls_anla LIKE LINE OF lt_anla
+      .
+  FIELD-SYMBOLS <ls_rek> LIKE LINE OF gt_rek.
+  LOOP AT gt_rek ASSIGNING <ls_rek>.
+    CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+      EXPORTING
+        input  = <ls_rek>-anln1
+      IMPORTING
+        output = <ls_rek>-anln1.
+    IF <ls_rek>-anln2 IS INITIAL.
+      <ls_rek>-anln2 = 0.
+    ENDIF.
+    CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+      EXPORTING
+        input  = <ls_rek>-anln2
+      IMPORTING
+        output = <ls_rek>-anln2.
+  ENDLOOP.
+  IF gt_rek IS NOT INITIAL.
+    SELECT a~anln1
+           a~anln2
+           u~zeusi
+    FROM anla AS a
+    LEFT JOIN anlu AS u ON
+        a~anln1 = u~anln1
+    AND a~anln2 = u~anln2
+    AND a~bukrs = u~bukrs
+    INTO TABLE lt_anla
+    FOR ALL ENTRIES IN gt_rek
+    WHERE a~bukrs EQ p_bukrs
+    AND   a~anln1 EQ gt_rek-anln1
+    AND   a~anln2 EQ gt_rek-anln2
+    AND ( a~deakt = '00000000' OR  a~deakt >= gv_startdate OR a~deakt EQ space )
+      .
+
+    LOOP AT gt_rek ASSIGNING <ls_rek>.
+      IF <ls_rek>-zeusi IS INITIAL.
+        PERFORM detailed_text USING 'Ид объекта имущества из ИР ЕУСИ не передан'
+                                       icon_message_warning
+                                CHANGING <ls_rek>-text.
+      ENDIF.
+      READ TABLE lt_anla INTO ls_anla WITH KEY anln1 = <ls_rek>-anln1
+                                               anln2 = <ls_rek>-anln2.
+      IF sy-subrc EQ 0.
+        IF ls_anla-zeusi IS NOT INITIAL .
+          PERFORM detailed_text USING 'Ид объекта имущества в ИР ЕУСИ уже заполнен'
+                                       icon_message_warning
+                                CHANGING <ls_rek>-text.
+        ENDIF.
+      ELSE.
+        PERFORM detailed_text USING 'ОС либо списано, либо не существует'
+                                     icon_message_error
+                               CHANGING <ls_rek>-text.
+      ENDIF.
+    ENDLOOP.
+  ENDIF.
+  ASSIGN gt_rek TO <gt_out>.
+ENDFORM.                    " PROCESS_REK
+*&---------------------------------------------------------------------*
+*&      Form  SAVE_TO_DB
+*&---------------------------------------------------------------------*
+FORM save_to_db.
+  TYPES: BEGIN OF ty_anln_key
+       , anln1 LIKE anla-anln1
+       , anln2 LIKE anla-anln2
+       , END OF ty_anln_key
+       .
+
+  DATA: lt_anla TYPE SORTED TABLE OF anla WITH UNIQUE KEY anln1 anln2
+      , ls_anla LIKE LINE OF lt_anla
+      , lt_anlu TYPE SORTED TABLE OF anlu WITH UNIQUE KEY anln1 anln2
+      , ls_anlu LIKE LINE OF lt_anlu
+      , ls_bapi_anlu TYPE bapi_te_anlu
+      , lt_anln_key TYPE STANDARD TABLE OF ty_anln_key
+      , ls_anln_key LIKE LINE OF lt_anln_key
+      , lt_extensionin  LIKE TABLE OF bapiparex
+      , ls_extensionin  LIKE LINE OF lt_extensionin
+      , ls_return       LIKE bapiret2
+      .
+
+  FIELD-SYMBOLS: <ls_rek> LIKE LINE OF gt_rek.
+
+  LOOP AT gt_rek ASSIGNING <ls_rek> WHERE text IS INITIAL
+                                    AND (  NOT zeusi IS INITIAL OR NOT nzayav_eusi IS INITIAL OR NOT pzayav_eusi IS INITIAL ) .
+    ls_anln_key-anln1 = <ls_rek>-anln1.
+    ls_anln_key-anln2 = <ls_rek>-anln2.
+    APPEND ls_anln_key TO lt_anln_key.
+  ENDLOOP.
+  IF sy-subrc NE 0.
+    MESSAGE 'Нечего загружать' TYPE 'I' DISPLAY LIKE 'E'.
+    EXIT.
+  ENDIF.
+
+  IF NOT lt_anln_key IS INITIAL.
+    SELECT *
+    FROM anla
+    INTO TABLE lt_anla
+    FOR ALL ENTRIES IN lt_anln_key
+    WHERE bukrs = p_bukrs
+    AND   anln1 = lt_anln_key-anln1
+    AND   anln2 = lt_anln_key-anln2.
+  ENDIF.
+  IF NOT lt_anla IS INITIAL.
+    SELECT *
+    FROM anlu
+    INTO TABLE lt_anlu
+    FOR ALL ENTRIES IN lt_anla
+    WHERE bukrs = p_bukrs
+    AND   anln1 = lt_anla-anln1
+    AND   anln2 = lt_anla-anln2.
+  ENDIF.
+
+  LOOP AT gt_rek ASSIGNING <ls_rek> WHERE text IS INITIAL.
+    CLEAR ls_anla.
+    READ TABLE lt_anla INTO ls_anla WITH KEY anln1 = <ls_rek>-anln1
+                                             anln2 = <ls_rek>-anln2.
+    CHECK sy-subrc EQ 0.
+    CLEAR: ls_extensionin, lt_extensionin, ls_return, ls_bapi_anlu, ls_anlu.
+    ls_extensionin-structure = 'BAPI_TE_ANLU'.
+    READ TABLE lt_anlu INTO ls_anlu WITH KEY anln1 = <ls_rek>-anln1
+                                            anln2 = <ls_rek>-anln2.
+    IF sy-subrc IS INITIAL.
+      MOVE-CORRESPONDING ls_anlu TO ls_bapi_anlu.
+    ENDIF.
+    ls_bapi_anlu-zeusi = <ls_rek>-zeusi.
+    ls_bapi_anlu-nzayav_eusi = <ls_rek>-nzayav_eusi.
+    ls_bapi_anlu-pzayav_eusi = <ls_rek>-pzayav_eusi.
+
+    ls_bapi_anlu-comp_code   = ls_anla-bukrs.
+    ls_bapi_anlu-assetmaino  = ls_anla-anln1.
+    ls_bapi_anlu-assetsubno  = ls_anla-anln2.
+
+    cl_abap_container_utilities=>fill_container_c(
+          EXPORTING
+            im_value     = ls_bapi_anlu
+          IMPORTING
+            ex_container = ls_extensionin+30 ).
+
+    APPEND ls_extensionin TO lt_extensionin.
+    EXPORT  ls_bapi_te_anlu FROM ls_bapi_anlu
+        TO MEMORY ID 'ZHSE_SW_OUT'.
+    CALL FUNCTION 'BAPI_FIXEDASSET_CHANGE'
+      EXPORTING
+        companycode = p_bukrs
+        asset       = <ls_rek>-anln1
+        subnumber   = <ls_rek>-anln2
+      IMPORTING
+        return      = ls_return
+      TABLES
+        extensionin = lt_extensionin.
+    IF ls_return-type EQ 'E' OR ls_return-type EQ 'A'.
+      MESSAGE ID ls_return-id TYPE ls_return-type NUMBER ls_return-number
+            WITH ls_return-message_v1 ls_return-message_v2 ls_return-message_v3 ls_return-message_v4 INTO <ls_rek>-text.
+
+      PERFORM detailed_text USING <ls_rek>-text
+                                 icon_message_critical
+                             CHANGING <ls_rek>-text.
+      CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
+        IMPORTING
+          return = ls_return.
+    ELSE.
+      PERFORM detailed_text USING 'EУСИ загружен'
+                                  icon_message_information
+                              CHANGING <ls_rek>-text.
+      CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+        EXPORTING
+          wait = 'X'.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    " SAVE_TO_DB
+*&---------------------------------------------------------------------*
+*&      Form  DETAILED_TEXT
+*&---------------------------------------------------------------------*
+FORM detailed_text USING    p_text TYPE zgft_eusi_rek_upl-text
+                            p_icon TYPE icon-id
+                   CHANGING c_detailed TYPE zgft_eusi_rek_upl-text.
+  CALL FUNCTION 'ICON_CREATE'
+    EXPORTING
+      name                  = p_icon
+      text                  = p_text
+    IMPORTING
+      RESULT                = c_detailed
+    EXCEPTIONS
+      icon_not_found        = 1
+      outputfield_too_short = 2
+      OTHERS                = 3.
+ENDFORM.                    " DETAILED_TEXT
+*&---------------------------------------------------------------------*
+*&      Form  REFRESH_ALL
+*&---------------------------------------------------------------------*
+FORM refresh_all .
+  REFRESH: gt_out, gt_out_dv, gt_rek, gt_doo.
+ENDFORM.                    " REFRESH_ALL
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_NMA
+*&---------------------------------------------------------------------*
+FORM process_nma USING ut_map TYPE thy_map.
+  TYPES: BEGIN OF ty_anla
+         , anln1 TYPE anla-anln1
+         , anln2 TYPE anla-anln2
+         , land1 TYPE anla-land1
+         , lifnr TYPE anla-lifnr
+         , txt50 TYPE anla-txt50
+         , txa50 TYPE anla-txa50
+         , sernr TYPE anla-sernr
+         , zzautomodel TYPE anlu-zzautomodel
+         , zeusi TYPE anlu-zeusi
+         , nzayav_eusi TYPE anlu-nzayav_eusi
+         , pzayav_eusi TYPE anlu-pzayav_eusi
+         , END OF ty_anla
+         .
+  TYPES: BEGIN OF ty_comp
+       , lifnr LIKE anla-lifnr
+       , txt50 LIKE anla-txt50
+       , txa50 LIKE anla-txa50
+       , cadastr_num LIKE ztgft_cadastr-cadastr_num
+       , land1 LIKE anla-land1
+       , okato1 TYPE j_3rfproptaxv-okato1
+       , okato23 TYPE zegft_okato23
+       , adatu TYPE j_3rtasset-adatu
+       , baujj TYPE j_3rtvehicl-baujj
+       , unitp TYPE j_3rtasset-unitp
+       , power TYPE j_3rtasset-power
+       , sernr TYPE anla-sernr
+       , fleet_vin TYPE j_3rtvehicl-fleet_vin
+       , zzautomodel TYPE anlu-zzautomodel
+       , license_num TYPE j_3rtasset-license_num
+       , kad_adatu TYPE ztgft_cadastr-adatu
+       , oktmo_adatu TYPE j_3rfproptaxv-adatu
+       , END OF ty_comp
+       .
+  DATA: lt_anla TYPE SORTED TABLE OF ty_anla WITH UNIQUE KEY anln1 anln2
+      , lt_anla_eusi TYPE SORTED TABLE OF ty_anla WITH UNIQUE KEY zeusi
+      , lt_anla_key TYPE STANDARD TABLE OF ty_anla
+      , lt_eusi_key TYPE STANDARD TABLE OF ty_anla
+      , lt_map TYPE SORTED TABLE OF ty_map WITH UNIQUE KEY col
+      , ls_map LIKE LINE OF lt_map
+      , ls_anla_key LIKE LINE OF lt_anla_key
+      , ls_anla LIKE LINE OF lt_anla
+      , ls_nma LIKE LINE OF gt_nma
+      , lv_cnt TYPE sy-tabix
+      , lt_nma TYPE STANDARD TABLE OF zgft_eusi_rek_nma
+      .
+  DATA: lt_ztgft_cadastr TYPE STANDARD TABLE OF ztgft_cadastr
+      , ls_ztgft_cadastr LIKE LINE OF lt_ztgft_cadastr
+      , lt_j_3rfproptaxv TYPE STANDARD TABLE OF j_3rfproptaxv
+      , ls_j_3rfproptaxv LIKE LINE OF lt_j_3rfproptaxv
+      , lt_j_3rtasset TYPE STANDARD TABLE OF j_3rtasset
+      , ls_j_3rtasset LIKE LINE OF lt_j_3rtasset
+      , lt_j_3rtvehicl TYPE STANDARD TABLE OF j_3rtvehicl
+      , ls_j_3rtvehicl LIKE LINE OF lt_j_3rtvehicl
+      .
+
+  DATA: ls_sap TYPE ty_comp
+      , ls_eusi TYPE ty_comp
+      .
+  FIELD-SYMBOLS: <lv_sap> TYPE ANY
+             , <lv_eusi> TYPE ANY
+             .
+  DEFINE init_val.
+    if &1 is initial or &1 = space.
+      &1 = '00000000'.
+    endif.
+  END-OF-DEFINITION.
+  FIELD-SYMBOLS <ls_nma> LIKE LINE OF gt_doo.
+  LOOP AT ut_map INTO ls_map.
+    CHECK ls_map-col >= 10.
+    IF ls_map-value = 'STREET' OR ls_map-value = 'CTYPV' OR ls_map-value = 'ZAV_SERNR'.
+      CONTINUE.
+    ENDIF.
+    ADD 1 TO lv_cnt.
+    ls_map-col_old = ls_map-col.
+    ls_map-col = lv_cnt.
+    INSERT ls_map INTO TABLE lt_map.
+  ENDLOOP.
+  LOOP AT gt_doo ASSIGNING <ls_nma>.
+    CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+      EXPORTING
+        input  = <ls_nma>-anln1
+      IMPORTING
+        output = <ls_nma>-anln1.
+    IF <ls_nma>-anln2 IS INITIAL.
+      <ls_nma>-anln2 = 0.
+    ENDIF.
+    CALL FUNCTION 'CONVERSION_EXIT_ALPHA_INPUT'
+      EXPORTING
+        input  = <ls_nma>-anln2
+      IMPORTING
+        output = <ls_nma>-anln2.
+
+    IF <ls_nma>-anln1 IS NOT INITIAL.
+      ls_anla_key-anln1 = <ls_nma>-anln1.
+      ls_anla_key-anln2 = <ls_nma>-anln2.
+      APPEND ls_anla_key TO lt_anla_key. CLEAR ls_anla_key.
+    ELSEIF <ls_nma>-anln1 IS INITIAL AND <ls_nma>-zeusi IS NOT INITIAL.
+      ls_anla_key-zeusi = <ls_nma>-zeusi.
+      ls_anla_key-nzayav_eusi = <ls_nma>-nzayav_eusi.
+      ls_anla_key-pzayav_eusi = <ls_nma>-pzayav_eusi.
+      APPEND ls_anla_key TO lt_eusi_key. CLEAR ls_anla_key.
+    ENDIF.
+  ENDLOOP.
+  IF lt_anla_key IS NOT INITIAL.
+    SELECT a~anln1
+           a~anln2
+           a~land1
+           a~lifnr
+           a~txt50
+           a~txa50
+           a~sernr
+           u~zzautomodel
+           u~zeusi
+           u~nzayav_eusi
+           u~pzayav_eusi
+    FROM anla AS a
+    LEFT JOIN anlu AS u ON
+        a~anln1 = u~anln1
+    AND a~anln2 = u~anln2
+    AND a~bukrs = u~bukrs
+    INTO TABLE lt_anla
+    FOR ALL ENTRIES IN lt_anla_key
+    WHERE a~bukrs EQ p_bukrs
+    AND   a~anln1 EQ lt_anla_key-anln1
+    AND   a~anln2 EQ lt_anla_key-anln2
+    AND ( a~deakt = '00000000' OR  a~deakt >= gv_startdate OR a~deakt EQ space ).
+  ENDIF.
+  IF lt_eusi_key IS NOT INITIAL.
+    SELECT a~anln1
+          a~anln2
+          a~land1
+          a~lifnr
+          a~txt50
+          a~txa50
+          a~sernr
+          u~zzautomodel
+          u~zeusi
+          u~nzayav_eusi
+          u~pzayav_eusi
+   FROM anla AS a
+   JOIN anlu AS u ON
+       a~anln1 = u~anln1
+   AND a~anln2 = u~anln2
+   AND a~bukrs = u~bukrs
+   INTO TABLE lt_anla_eusi
+   FOR ALL ENTRIES IN lt_eusi_key
+   WHERE a~bukrs EQ p_bukrs
+   AND   u~zeusi EQ lt_eusi_key-zeusi
+   AND ( a~deakt = '00000000' OR  a~deakt >= gv_startdate OR a~deakt EQ space ).
+  ENDIF.
+
+  IF NOT lt_anla IS INITIAL.
+    SELECT *
+    FROM ztgft_cadastr
+    INTO TABLE lt_ztgft_cadastr
+    FOR ALL ENTRIES IN lt_anla
+    WHERE bukrs = p_bukrs
+    AND   anln1 EQ lt_anla-anln1
+    AND   anln2 EQ lt_anla-anln2.
+
+    SELECT *
+    FROM j_3rfproptaxv
+    INTO TABLE lt_j_3rfproptaxv
+    FOR ALL ENTRIES IN lt_anla
+    WHERE bukrs = p_bukrs
+    AND   anln1 EQ lt_anla-anln1
+    AND   anln2 EQ lt_anla-anln2.
+    SORT lt_j_3rfproptaxv BY bukrs anln1 anln2 bdatu DESCENDING.
+
+    SELECT *
+    FROM j_3rtasset
+    INTO TABLE lt_j_3rtasset
+    FOR ALL ENTRIES IN lt_anla
+    WHERE bukrs = p_bukrs
+    AND   anln1 EQ lt_anla-anln1
+    AND   anln2 EQ lt_anla-anln2.
+
+    SELECT *
+    FROM j_3rtvehicl
+    INTO TABLE lt_j_3rtvehicl
+    FOR ALL ENTRIES IN lt_anla
+    WHERE bukrs = p_bukrs
+    AND   anln1 EQ lt_anla-anln1
+    AND   anln2 EQ lt_anla-anln2.
+  ENDIF.
+
+  IF NOT lt_anla_eusi IS INITIAL.
+    SELECT *
+    FROM ztgft_cadastr
+    APPENDING TABLE lt_ztgft_cadastr
+    FOR ALL ENTRIES IN lt_anla_eusi
+    WHERE bukrs = p_bukrs
+    AND   anln1 EQ lt_anla_eusi-anln1
+    AND   anln2 EQ lt_anla_eusi-anln2.
+
+    SELECT *
+    FROM j_3rfproptaxv
+    APPENDING TABLE lt_j_3rfproptaxv
+    FOR ALL ENTRIES IN lt_anla_eusi
+    WHERE bukrs = p_bukrs
+    AND   anln1 EQ lt_anla_eusi-anln1
+    AND   anln2 EQ lt_anla_eusi-anln2.
+    SORT lt_j_3rfproptaxv BY bukrs anln1 anln2 bdatu DESCENDING.
+
+    SELECT *
+    FROM j_3rtasset
+    APPENDING TABLE lt_j_3rtasset
+    FOR ALL ENTRIES IN lt_anla_eusi
+    WHERE bukrs = p_bukrs
+    AND   anln1 EQ lt_anla_eusi-anln1
+    AND   anln2 EQ lt_anla_eusi-anln2.
+
+    SELECT *
+    FROM j_3rtvehicl
+    APPENDING TABLE lt_j_3rtvehicl
+    FOR ALL ENTRIES IN lt_anla_eusi
+    WHERE bukrs = p_bukrs
+    AND   anln1 EQ lt_anla_eusi-anln1
+    AND   anln2 EQ lt_anla_eusi-anln2.
+  ENDIF.
+  SORT lt_ztgft_cadastr BY  bukrs anln1 anln2.
+
+  LOOP AT gt_doo ASSIGNING <ls_nma>.
+    init_val: <ls_nma>-adatu, <ls_nma>-kad_adatu, <ls_nma>-oktmo_adatu.
+
+    PERFORM convert_date USING <ls_nma>-oktmo_adatu
+                        CHANGING <ls_nma>-oktmo_adatu_conv.
+    IF <ls_nma>-anln1 IS NOT INITIAL  AND <ls_nma>-zeusi IS INITIAL
+      OR  <ls_nma>-anln1 IS NOT INITIAL  AND <ls_nma>-zeusi IS NOT INITIAL.
+      READ TABLE lt_anla INTO ls_anla WITH KEY anln1 = <ls_nma>-anln1
+                                               anln2 = <ls_nma>-anln2.
+      IF sy-subrc EQ 0.
+        IF ls_anla-zeusi IS INITIAL AND ls_anla-nzayav_eusi IS INITIAL AND ls_anla-pzayav_eusi IS INITIAL.
+          PERFORM detailed_text USING 'Не присвоен ЕУСИ в БУС'
+                                       icon_message_error
+                                CHANGING ls_nma-text.
+        ENDIF.
+      ELSE.
+*        PERFORM detailed_text USING 'ОС либо списано, либо не существует'
+*                                     icon_message_error
+*                               CHANGING ls_nma-text.
+      ENDIF.
+    ELSEIF <ls_nma>-anln1 IS INITIAL AND <ls_nma>-zeusi IS NOT INITIAL.
+      READ TABLE lt_anla_eusi INTO ls_anla WITH KEY zeusi = <ls_nma>-zeusi.
+*      IF sy-subrc EQ 0.
+*      ELSE.
+*        PERFORM detailed_text USING 'Отсутствует в SAP (нет системного номера)'
+*                                       icon_message_error
+*                                 CHANGING ls_nma-text.
+*      ENDIF.
+    ENDIF.
+    IF ls_anla IS INITIAL.
+      PERFORM detailed_text USING 'Отсутствует в SAP (нет системного номера)'
+                                             icon_message_error
+                                       CHANGING ls_nma-text.
+    ENDIF.
+
+    MOVE-CORRESPONDING <ls_nma> TO ls_nma.
+    <ls_nma>-anln1 = ls_anla-anln1.
+    <ls_nma>-anln2 = ls_anla-anln2.
+
+    IF ls_anla-anln1 IS NOT INITIAL.
+      CLEAR: ls_ztgft_cadastr, ls_j_3rfproptaxv, ls_j_3rtasset, ls_j_3rtvehicl, ls_sap, ls_eusi.
+      READ TABLE lt_ztgft_cadastr INTO ls_ztgft_cadastr WITH KEY bukrs = p_bukrs
+                                                                 anln1 = ls_anla-anln1
+                                                                 anln2 = ls_anla-anln2 BINARY SEARCH.
+
+      LOOP AT lt_j_3rfproptaxv INTO ls_j_3rfproptaxv WHERE bukrs = p_bukrs
+                                                     AND   anln1 = ls_anla-anln1
+                                                     AND   anln2 = ls_anla-anln2
+                                                     AND   bdatu >= <ls_nma>-oktmo_adatu_conv
+                                                     AND   adatu <= <ls_nma>-oktmo_adatu_conv.
+
+        EXIT.
+      ENDLOOP.
+
+      READ TABLE lt_j_3rtasset INTO ls_j_3rtasset WITH KEY bukrs = p_bukrs
+                                                           anln1 = ls_anla-anln1
+                                                           anln2 = ls_anla-anln2.
+
+      READ TABLE lt_j_3rtvehicl INTO ls_j_3rtvehicl WITH KEY bukrs = p_bukrs
+                                                           anln1 = ls_anla-anln1
+                                                           anln2 = ls_anla-anln2.
+      MOVE-CORRESPONDING <ls_nma> TO ls_eusi.
+      ls_eusi-kad_adatu(4) = <ls_nma>-kad_adatu+6(4).
+      ls_eusi-kad_adatu+4(2) = <ls_nma>-kad_adatu+3(2).
+      ls_eusi-kad_adatu+6(2) = <ls_nma>-kad_adatu(2).
+
+      ls_eusi-oktmo_adatu(4) = <ls_nma>-oktmo_adatu+6(4).
+      ls_eusi-oktmo_adatu+4(2) = <ls_nma>-oktmo_adatu+3(2).
+      ls_eusi-oktmo_adatu+6(2) = <ls_nma>-oktmo_adatu(2).
+
+      MOVE-CORRESPONDING ls_anla TO ls_sap.
+      ls_sap-cadastr_num  = ls_ztgft_cadastr-cadastr_num.
+      ls_sap-kad_adatu  = ls_ztgft_cadastr-adatu.
+      ls_sap-adatu  = ls_j_3rtasset-adatu.
+      ls_sap-license_num  = ls_j_3rtasset-license_num.
+      ls_sap-unitp  = ls_j_3rtasset-unitp.
+      ls_sap-power  = ls_j_3rtasset-power.
+      ls_sap-fleet_vin = ls_j_3rtvehicl-fleet_vin .
+      CONCATENATE ls_j_3rfproptaxv-okato2 ls_j_3rfproptaxv-okato3 INTO ls_sap-okato23.
+      ls_sap-baujj  = ls_j_3rtvehicl-baujj.
+      IF ls_sap <> ls_eusi.
+        DO.
+          CLEAR ls_map.
+          READ TABLE lt_map INTO ls_map WITH KEY col = sy-index.
+          UNASSIGN: <lv_sap>, <lv_eusi>.
+          ASSIGN COMPONENT sy-index: OF STRUCTURE ls_sap TO <lv_sap>
+                                   , OF STRUCTURE ls_eusi TO <lv_eusi>.
+          IF <lv_sap> IS NOT ASSIGNED OR <lv_eusi> IS NOT ASSIGNED.
+            EXIT.
+          ELSE.
+            IF <lv_sap> <> <lv_eusi>.
+              MOVE-CORRESPONDING <ls_nma> TO ls_nma.
+              ls_nma-fieldname = ls_map-value.
+              ls_nma-fieldname_txt = ls_map-text.
+              ls_nma-val_xls = <lv_eusi>.
+              ls_nma-val_sap = <lv_sap>.
+              ls_nma-numb = ls_map-col_old.
+              APPEND ls_nma TO lt_nma.
+            ENDIF.
+          ENDIF.
+        ENDDO.
+      ELSE.
+        APPEND ls_nma TO lt_nma.  CLEAR ls_nma.
+      ENDIF.
+    ELSE.
+      APPEND ls_nma TO lt_nma.  CLEAR ls_nma.
+    ENDIF.
+  ENDLOOP.
+  gt_nma = lt_nma.
+  ASSIGN gt_nma TO <gt_out>.
+ENDFORM.                    " PROCESS_NMA
+
+*&---------------------------------------------------------------------*
+*&      Form  REFRESH_GRID
+*&---------------------------------------------------------------------*
+FORM refresh_grid .
+  DATA: ls_stable TYPE lvc_s_stbl.
+  ls_stable = 'XX'.
+  gr_grid100->refresh_table_display(
+    EXPORTING
+      is_stable      = ls_stable
+      i_soft_refresh = abap_true
+    EXCEPTIONS
+      finished       = 1
+      OTHERS         = 2 ).
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+               WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+ENDFORM.                    " REFRESH_GRID
+*&---------------------------------------------------------------------*
+*&      Form  SAVE_TO_DB_PR
+*&---------------------------------------------------------------------*
+FORM save_to_db_pr USING t_rows TYPE lvc_t_row.
+  TYPES: BEGIN OF ty_eusi
+       , zeusi LIKE anlu-zeusi
+       , nzayav_eusi LIKE anlu-nzayav_eusi
+       , pzayav_eusi LIKE anlu-pzayav_eusi
+       , t_doo TYPE zgft_eusi_rek
+       , END OF ty_eusi
+       .
+
+  DATA: lt_eusi1 TYPE STANDARD TABLE OF ty_eusi
+      , lt_eusi2 TYPE STANDARD TABLE OF ty_eusi
+      , lt_eusi3 TYPE STANDARD TABLE OF ty_eusi
+      , ls_eusi TYPE ty_eusi
+      , ls_rows LIKE LINE OF t_rows
+      .
+
+  FIELD-SYMBOLS: <ls_doo> LIKE LINE OF gt_doo.
+
+  IF t_rows IS INITIAL.
+    LOOP AT gt_doo ASSIGNING <ls_doo>.
+      IF <ls_doo>-zeusi IS INITIAL AND <ls_doo>-nzayav_eusi IS NOT INITIAL AND <ls_doo>-pzayav_eusi IS NOT INITIAL.
+        ls_eusi-nzayav_eusi = <ls_doo>-nzayav_eusi.
+        ls_eusi-pzayav_eusi = <ls_doo>-pzayav_eusi.
+        APPEND ls_eusi TO lt_eusi1. CLEAR ls_eusi.
+      ENDIF.
+      IF <ls_doo>-zeusi IS NOT INITIAL AND <ls_doo>-nzayav_eusi IS INITIAL AND <ls_doo>-pzayav_eusi IS INITIAL.
+        ls_eusi-zeusi = <ls_doo>-zeusi.
+        APPEND ls_eusi TO lt_eusi2. CLEAR ls_eusi.
+      ENDIF.
+      IF <ls_doo>-zeusi IS NOT INITIAL AND <ls_doo>-nzayav_eusi IS NOT INITIAL AND <ls_doo>-pzayav_eusi IS NOT INITIAL.
+        ls_eusi-zeusi = <ls_doo>-zeusi.
+        APPEND ls_eusi TO lt_eusi3. CLEAR ls_eusi.
+      ENDIF.
+    ENDLOOP.
+  ELSE.
+    LOOP AT t_rows INTO ls_rows.
+      READ TABLE gt_doo ASSIGNING <ls_doo> INDEX ls_rows-index.
+      CHECK sy-subrc EQ 0.
+      IF <ls_doo>-zeusi IS INITIAL AND <ls_doo>-nzayav_eusi IS NOT INITIAL AND <ls_doo>-pzayav_eusi IS NOT INITIAL.
+        ls_eusi-nzayav_eusi = <ls_doo>-nzayav_eusi.
+        ls_eusi-pzayav_eusi = <ls_doo>-pzayav_eusi.
+        APPEND ls_eusi TO lt_eusi1. CLEAR ls_eusi.
+      ENDIF.
+      IF <ls_doo>-zeusi IS NOT INITIAL AND <ls_doo>-nzayav_eusi IS INITIAL AND <ls_doo>-pzayav_eusi IS INITIAL.
+        ls_eusi-zeusi = <ls_doo>-zeusi.
+        APPEND ls_eusi TO lt_eusi2. CLEAR ls_eusi.
+      ENDIF.
+      IF <ls_doo>-zeusi IS NOT INITIAL AND <ls_doo>-nzayav_eusi IS NOT INITIAL AND <ls_doo>-pzayav_eusi IS NOT INITIAL.
+        ls_eusi-zeusi = <ls_doo>-zeusi.
+        APPEND ls_eusi TO lt_eusi3. CLEAR ls_eusi.
+      ENDIF.
+    ENDLOOP.
+  ENDIF.
+
+  TYPES: BEGIN OF ty_anla
+       , anln1 LIKE anla-anln1
+       , anln2 LIKE anla-anln2
+       , lifnr LIKE anla-lifnr
+       , land1 LIKE anla-land1
+       , sernr LIKE anla-sernr
+       , fiamt LIKE anla-fiamt
+       , zzautomodel LIKE anlu-zzautomodel
+       , zeusi LIKE anlu-zeusi
+       , nzayav_eusi LIKE anlu-nzayav_eusi
+       , pzayav_eusi LIKE anlu-pzayav_eusi
+       , END OF ty_anla
+       .
+
+  DATA: lt_anla TYPE STANDARD TABLE OF ty_anla
+      , ls_anla LIKE LINE OF lt_anla
+      .
+
+  IF NOT lt_eusi1 IS INITIAL.
+    SELECT a~anln1
+           a~anln2
+           a~lifnr
+           a~land1
+           a~fiamt
+           a~sernr
+           u~zzautomodel
+           u~zeusi
+           u~nzayav_eusi
+           u~pzayav_eusi
+    FROM anla AS a
+    JOIN anlu AS u ON
+        a~bukrs = u~bukrs
+    AND a~anln1 = u~anln1
+    AND a~anln2 = u~anln2
+    INTO TABLE lt_anla
+    FOR ALL ENTRIES IN lt_eusi1
+    WHERE a~bukrs = p_bukrs
+    AND   a~aktiv <> space
+*    AND   a~deakt >
+    AND   u~nzayav_eusi = lt_eusi1-nzayav_eusi
+    AND   u~pzayav_eusi = lt_eusi1-pzayav_eusi.
+  ENDIF.
+
+  IF NOT lt_eusi2 IS INITIAL.
+    SELECT a~anln1
+           a~anln2
+           a~lifnr
+           a~land1
+           a~fiamt
+           a~sernr
+           u~zzautomodel
+           u~zeusi
+           u~nzayav_eusi
+           u~pzayav_eusi
+    FROM anla AS a
+    JOIN anlu AS u ON
+        a~bukrs = u~bukrs
+    AND a~anln1 = u~anln1
+    AND a~anln2 = u~anln2
+    APPENDING TABLE lt_anla
+    FOR ALL ENTRIES IN lt_eusi2
+    WHERE a~bukrs = p_bukrs
+    AND   a~aktiv <> space
+*    AND   a~deakt >
+    AND   u~zeusi = lt_eusi2-zeusi.
+  ENDIF.
+
+  IF NOT lt_eusi3 IS INITIAL.
+    SELECT a~anln1
+           a~anln2
+           a~lifnr
+           a~land1
+           a~fiamt
+           a~sernr
+           u~zzautomodel
+           u~zeusi
+           u~nzayav_eusi
+           u~pzayav_eusi
+    FROM anla AS a
+    JOIN anlu AS u ON
+        a~bukrs = u~bukrs
+    AND a~anln1 = u~anln1
+    AND a~anln2 = u~anln2
+    APPENDING TABLE lt_anla
+    FOR ALL ENTRIES IN lt_eusi3
+    WHERE a~bukrs = p_bukrs
+    AND   a~aktiv <> space
+*    AND   a~deakt >
+    AND   u~zeusi = lt_eusi3-zeusi.
+  ENDIF.
+  SORT lt_anla BY anln1 anln2.
+  DELETE ADJACENT DUPLICATES FROM lt_anla COMPARING anln1 anln2.
+  IF NOT lt_anla IS INITIAL.
+    DATA: lt_j_3rfproptaxv TYPE STANDARD TABLE OF j_3rfproptaxv
+        , ls_j_3rfproptaxv LIKE LINE OF lt_j_3rfproptaxv
+        , lt_j_3rtasset TYPE STANDARD TABLE OF j_3rtasset
+        , lt_j_3rtasset_upd TYPE STANDARD TABLE OF j_3rtasset
+        , ls_j_3rtasset LIKE LINE OF lt_j_3rtasset
+        , lt_j_3rtvehicl TYPE STANDARD TABLE OF j_3rtvehicl
+        , ls_j_3rtvehicl LIKE LINE OF lt_j_3rtvehicl
+        , lt_ztgft_cadastr TYPE STANDARD TABLE OF ztgft_cadastr
+        , ls_ztgft_cadastr LIKE LINE OF lt_ztgft_cadastr
+        , lt_anlu TYPE SORTED TABLE OF anlu WITH UNIQUE KEY anln1 anln2
+        , ls_anlu LIKE LINE OF lt_anlu
+        .
+    SELECT * FROM j_3rfproptaxv
+    INTO TABLE lt_j_3rfproptaxv
+      FOR ALL ENTRIES IN lt_anla
+      WHERE bukrs EQ p_bukrs
+      AND  anln1 = lt_anla-anln1
+      AND  anln2 = lt_anla-anln2.
+
+    SELECT * FROM j_3rtasset
+     INTO TABLE lt_j_3rtasset
+     FOR ALL ENTRIES IN lt_anla
+     WHERE bukrs EQ p_bukrs
+     AND  anln1 = lt_anla-anln1
+     AND  anln2 = lt_anla-anln2.
+
+    SELECT * FROM j_3rtvehicl
+     INTO TABLE lt_j_3rtvehicl
+     FOR ALL ENTRIES IN lt_anla
+     WHERE bukrs EQ p_bukrs
+     AND  anln1 = lt_anla-anln1
+     AND  anln2 = lt_anla-anln2.
+
+    DATA: lv_bdatu LIKE ztgft_cadastr-bdatu.
+    SELECT * FROM ztgft_cadastr
+     INTO TABLE lt_ztgft_cadastr
+     FOR ALL ENTRIES IN lt_anla
+     WHERE bukrs EQ p_bukrs
+     AND  anln1 = lt_anla-anln1
+     AND  anln2 = lt_anla-anln2.
+
+    SELECT *
+     FROM anlu
+     INTO TABLE lt_anlu
+     FOR ALL ENTRIES IN lt_anla
+     WHERE bukrs = p_bukrs
+     AND   anln1 = lt_anla-anln1
+     AND   anln2 = lt_anla-anln2.
+
+  ENDIF.
+  DATA: ls_origin TYPE bapi1022_feglg009
+      , ls_originx TYPE bapi1022_feglg009x
+      , ls_generaldata TYPE	bapi1022_feglg001
+      , ls_generaldatax	TYPE bapi1022_feglg001x
+      , ls_return TYPE bapiret2
+      , lt_extensionin  LIKE TABLE OF bapiparex
+      , ls_extensionin  LIKE LINE OF lt_extensionin
+      , ls_bapi_anlu TYPE bapi_te_anlu
+      .
+
+  LOOP AT lt_anla INTO ls_anla.
+    READ TABLE  gt_doo ASSIGNING <ls_doo> WITH KEY zeusi = ls_anla-zeusi.
+    CHECK sy-subrc EQ 0.
+
+
+    IF NOT <ls_doo>-lifnr IS INITIAL.
+      ls_origin-vendor_no = <ls_doo>-lifnr.
+      ls_originx-vendor_no = abap_true.
+    ENDIF.
+    IF NOT <ls_doo>-land1 IS INITIAL.
+      ls_origin-country = <ls_doo>-land1.
+      ls_originx-country = abap_true.
+    ENDIF.
+    IF NOT <ls_doo>-sernr IS INITIAL.
+      ls_generaldata-serial_no = <ls_doo>-sernr.
+      ls_generaldatax-serial_no = abap_true.
+    ENDIF.
+
+    CLEAR: ls_anlu, ls_extensionin, lt_extensionin, ls_return, ls_bapi_anlu, ls_ztgft_cadastr, ls_j_3rfproptaxv.
+    READ TABLE lt_anlu INTO ls_anlu WITH KEY bukrs = p_bukrs
+                                             anln1 = ls_anla-anln1
+                                             anln2 = ls_anla-anln2.
+    IF sy-subrc EQ 0.
+      ls_extensionin-structure = 'BAPI_TE_ANLU'.
+      MOVE-CORRESPONDING ls_anlu TO ls_bapi_anlu.
+      ls_bapi_anlu-zzautomodel = <ls_doo>-zzautomodel.
+
+      ls_bapi_anlu-comp_code   = ls_anlu-bukrs.
+      ls_bapi_anlu-assetmaino  = ls_anlu-anln1.
+      ls_bapi_anlu-assetsubno  = ls_anlu-anln2.
+
+      cl_abap_container_utilities=>fill_container_c(
+            EXPORTING
+              im_value     = ls_bapi_anlu
+            IMPORTING
+              ex_container = ls_extensionin+30 ).
+
+      APPEND ls_extensionin TO lt_extensionin.
+
+      EXPORT  ls_bapi_te_anlu FROM ls_bapi_anlu TO MEMORY ID 'ZHSE_SW_OUT'.
+    ENDIF.
+    CALL FUNCTION 'BAPI_FIXEDASSET_CHANGE'
+      EXPORTING
+        companycode  = p_bukrs
+        asset        = ls_anla-anln1
+        subnumber    = ls_anla-anln2
+        generaldata  = ls_generaldata
+        generaldatax = ls_generaldatax
+        origin       = ls_origin
+        originx      = ls_originx
+      IMPORTING
+        return       = ls_return
+      TABLES
+        extensionin  = lt_extensionin.
+    IF ls_return-type EQ 'E' OR ls_return-type EQ 'A'.
+      MESSAGE ID ls_return-id TYPE 'I' NUMBER ls_return-number DISPLAY LIKE ls_return-type
+          WITH ls_return-message_v1 ls_return-message_v2 ls_return-message_v3 ls_return-message_v4.
+      CALL FUNCTION 'BAPI_TRANSACTION_ROLLBACK'
+        IMPORTING
+          return = ls_return.
+    ELSE.
+      CALL FUNCTION 'BAPI_TRANSACTION_COMMIT'
+        EXPORTING
+          wait = 'X'.
+      CLEAR: ls_j_3rtasset, ls_j_3rtvehicl.
+      READ TABLE lt_j_3rtasset INTO ls_j_3rtasset WITH KEY bukrs = p_bukrs
+                                                           anln1 = ls_anla-anln1
+                                                           anln2 = ls_anla-anln2.
+      IF sy-subrc NE 0.
+        ls_j_3rtasset-bukrs = p_bukrs.
+        ls_j_3rtasset-anln1 = ls_anla-anln1.
+        ls_j_3rtasset-anln2 = ls_anla-anln2.
+        ls_j_3rtasset-bdatu = '99991231'.
+        ls_j_3rtasset-adatu = <ls_doo>-adatu_conv.
+        ls_j_3rtasset-unitp = <ls_doo>-unitp.
+        ls_j_3rtasset-power = <ls_doo>-power.
+        ls_j_3rtasset-license_num = <ls_doo>-license_num.
+        MODIFY j_3rtasset FROM ls_j_3rtasset.
+        IF sy-subrc EQ 0.
+          COMMIT WORK.
+        ELSE.
+          ROLLBACK WORK.
+        ENDIF.
+      ENDIF.
+
+      READ TABLE lt_j_3rtvehicl INTO ls_j_3rtvehicl WITH KEY bukrs = p_bukrs
+                                                             anln1 = ls_anla-anln1
+                                                             anln2 = ls_anla-anln2.
+      IF sy-subrc NE 0.
+        ls_j_3rtvehicl-bukrs = p_bukrs.
+        ls_j_3rtvehicl-anln1 = ls_anla-anln1.
+        ls_j_3rtvehicl-anln2 = ls_anla-anln2.
+        ls_j_3rtvehicl-baujj = <ls_doo>-baujj.
+        ls_j_3rtvehicl-fleet_vin = <ls_doo>-fleet_vin.
+        MODIFY j_3rtvehicl FROM ls_j_3rtvehicl.
+        IF sy-subrc EQ 0.
+          COMMIT WORK.
+        ELSE.
+          ROLLBACK WORK.
+        ENDIF.
+      ENDIF.
+
+      LOOP AT  lt_j_3rfproptaxv INTO ls_j_3rfproptaxv WHERE bukrs = p_bukrs
+                                                      AND   anln1 = ls_anla-anln1
+                                                      AND   anln2 = ls_anla-anln2.
+        IF ls_j_3rfproptaxv-okato1 IS INITIAL AND ls_j_3rfproptaxv-okato2 IS INITIAL AND ls_j_3rfproptaxv-okato3 IS INITIAL.
+          ls_j_3rfproptaxv-okato1 = <ls_doo>-okato1.
+          ls_j_3rfproptaxv-okato2 = <ls_doo>-okato23(3).
+          ls_j_3rfproptaxv-okato3 = <ls_doo>-okato23+3(3).
+          MODIFY j_3rfproptaxv FROM ls_j_3rfproptaxv.
+          IF sy-subrc EQ 0.
+            COMMIT WORK.
+          ELSE.
+            ROLLBACK WORK.
+          ENDIF.
+        ENDIF.
+      ENDLOOP.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    " SAVE_TO_DB_PR
+*&---------------------------------------------------------------------*
+*&      Form  GET_SELROWS
+*&---------------------------------------------------------------------*
+FORM get_selrows CHANGING ct_rows TYPE lvc_t_row.
+  DATA: lt_rows TYPE lvc_t_roid.
+
+  gr_grid100->get_selected_rows( IMPORTING et_index_rows = ct_rows
+                                           et_row_no     = lt_rows ).
+ENDFORM.                    " GET_SELROWS
+*&---------------------------------------------------------------------*
+*&      Form  CONFIRM
+*&---------------------------------------------------------------------*
+FORM confirm  USING    p_text
+              CHANGING c_answer.
+  CALL FUNCTION 'POPUP_TO_CONFIRM'
+    EXPORTING
+      text_question         = p_text
+      text_button_1         = 'Да'(011)
+      text_button_2         = 'Нет'(012)
+      display_cancel_button = abap_false
+    IMPORTING
+      answer                = c_answer
+    EXCEPTIONS
+      text_not_found        = 1
+      OTHERS                = 2.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+ENDFORM.                    " CONFIRM
+*&---------------------------------------------------------------------*
+*&      Form  PROCESS_DOO
+*&---------------------------------------------------------------------*
+FORM process_doo .
+  FIELD-SYMBOLS <ls_doo> LIKE LINE OF gt_doo.
+  LOOP AT gt_doo ASSIGNING <ls_doo>.
+    CALL FUNCTION 'CONVERSION_EXIT_CUNIT_INPUT'
+      EXPORTING
+        input          = <ls_doo>-unitp
+        language       = sy-langu
+      IMPORTING
+        output         = <ls_doo>-unitp
+      EXCEPTIONS
+        unit_not_found = 1
+        OTHERS         = 2.
+    IF sy-subrc NE 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+    PERFORM convert_date USING <ls_doo>-adatu
+                         CHANGING <ls_doo>-adatu_conv.
+
+    PERFORM convert_date USING <ls_doo>-kad_adatu
+                         CHANGING <ls_doo>-kad_adatu_conv.
+
+    PERFORM convert_date USING <ls_doo>-oktmo_adatu
+                      CHANGING <ls_doo>-oktmo_adatu_conv.
+  ENDLOOP.
+ENDFORM.                    " PROCESS_DOO
+*&---------------------------------------------------------------------*
+*&      Form  CONVERT_DATE
+*&---------------------------------------------------------------------*
+FORM convert_date  USING    value(p_date) TYPE char12
+                   CHANGING c_date TYPE sy-datum.
+  TRANSLATE p_date USING '. '.
+  SHIFT p_date LEFT DELETING LEADING space.
+  CONDENSE p_date NO-GAPS.
+  c_date(4) = p_date+4(4).
+  c_date+4(2) = p_date+2(2).
+  c_date+6(2) = p_date+0(2).
+ENDFORM.                    " CONVERT_DATE
+
+*&---------------------------------------------------------------------*
+*&      Form  get_prefix
+*&---------------------------------------------------------------------*
+FORM get_prefix CHANGING p_c TYPE c.
+  STATICS: st_cnt TYPE i VALUE 0.
+  p_c = sy-abcde+st_cnt(1).
+  ADD 1 TO st_cnt.
+ENDFORM.                    " GET_PREFIX
+*&---------------------------------------------------------------------*
+*&      Form  PREPARE_MAP
+*&---------------------------------------------------------------------*
+FORM prepare_map CHANGING ct_map TYPE th_hmap.
+  DATA: ls_map LIKE LINE OF ct_map.
+  DATA: lv_cnt LIKE ls_map-col.
+  DEFINE app.
+    add 1 to lv_cnt.
+    write lv_cnt to ls_map-col right-justified.
+    translate ls_map-col using ' 0'.
+    ls_map-value = &1.
+    insert ls_map into table ct_map. clear ls_map.
+  END-OF-DEFINITION.
+
+  app: 'INDX'
+     , 'ANLN1'
+     , 'ANLN2'
+     , 'NZAYAV_EUSI'
+     , 'PZAYAV_EUSI'
+     , 'ZEUSI'
+     , 'BUKRS'
+     , 'BELNR'
+     , 'BUDAT'
+     , 'LIFNR'
+     , 'TXT50'
+     , 'TXA50'
+     , 'CADASTR_NUM'
+     , 'LAND1'
+     , 'OKATO1'
+     , 'OKATO23'
+     , 'STREET'
+     , 'ADATU'
+     , 'BAUJJ'
+     , 'CTYPV'
+     , 'UNITP'
+     , 'POWER'
+     , 'SERNR'
+     , 'ZAV_SERNR'
+     , 'FLEET_VIN'
+     , 'ZZAUTOMODEL'
+     , 'LICENSE_NUM'
+     , 'KAD_ADATU'
+     , 'OKTMO_ADATU'
+     .
+ENDFORM.                    " PREPARE_MAP
+*&---------------------------------------------------------------------*
+*&      Form  get_last_row
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_PATH     text
+*      -->P_ROW      text
+*----------------------------------------------------------------------*
+FORM get_last_row  USING    p_path TYPE string
+                   CHANGING p_row TYPE string.
+  CREATE OBJECT go_excel 'EXCEL.APPLICATION'.
+  SET PROPERTY OF go_excel 'Visible' = 0.
+  CALL METHOD OF go_excel 'Workbooks' = go_wlist.
+
+  CALL METHOD OF go_wlist 'OPEN'
+    EXPORTING #1 = p_path.
+
+  CALL METHOD OF go_excel 'Cells' = go_fcell
+    EXPORTING
+    #1 = 1  " Row
+    #2 = 1. " Col
+
+  CALL METHOD OF go_excel 'Cells' = go_lcell
+    EXPORTING
+    #1 = 65536  " Row
+    #2 = 1.     " Col
+
+  CALL METHOD OF go_excel 'Range' = go_range
+    EXPORTING
+    #1 = go_fcell
+    #2 = go_lcell.
+
+  CALL METHOD OF go_range 'SpecialCells' = go_scell
+    EXPORTING
+    #1 = 11.
+
+  GET PROPERTY OF go_scell 'ROW' = p_row.
+
+  CALL METHOD OF go_excel 'QUIT'.
+  FREE OBJECT: go_excel ,go_wlist ,go_fcell
+             , go_lcell ,go_range ,go_scell.
+
+  go_excel-handle = -1.
+ENDFORM.                    " GET_LAST_ROW
+*&---------------------------------------------------------------------*
+*&      Form  SAVE_TO_DB_BIG
+*&---------------------------------------------------------------------*
+FORM save_to_db_big .
+  CALL FUNCTION 'ZGFT_EUSI_REK_PROC' IN BACKGROUND TASK
+    EXPORTING
+      i_bukrs = p_bukrs
+    CHANGING
+      t_rek   = gt_rek[].
+  COMMIT WORK.
+  MESSAGE 'Фоновое задание запущено' TYPE 'I'.
+ENDFORM.                    " SAVE_TO_DB_BIG
+
+*&---------------------------------------------------------------------*
+*&      Form  insert_cell_xls
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->:                     text
+*      -->ROW                   text
+*      -->COLUMN                text
+*      -->VALUE                 text
+*      -->NAME                  text
+*      -->TOP                   text
+*      -->LEFT                  text
+*      -->LO_DOCKING_CONTAINER  text
+*      -->LO_CONTROL            text
+*      -->LO_DOCUMENT_PROXY     text
+*      -->LO_EXCEL_IFACE        text
+*      -->LO_ERROR              text
+*      -->LC_EXCELTYPE          text
+*      -->LV_RETCODE            text
+*----------------------------------------------------------------------*
+FORM insert_cell_xls USING: row TYPE soi_range_item-rows
+                  column TYPE soi_range_item-columns
+                  value "TYPE soi_generic_item-value
+                  name TYPE soi_range_item-name
+                  top TYPE i
+                  left TYPE i
+                  lo_docking_container TYPE REF TO cl_gui_docking_container
+                  lo_control TYPE REF TO i_oi_container_control
+                  lo_document_proxy TYPE REF TO i_oi_document_proxy
+                  lo_excel_iface TYPE REF TO i_oi_spreadsheet
+                  lo_error TYPE REF TO i_oi_error
+                  lc_exceltype TYPE soi_document_type
+                  lv_retcode TYPE soi_ret_string
+                  .
+
+  DATA: lt_range TYPE soi_range_list
+       , lt_content TYPE soi_generic_table
+       , rangeitem TYPE soi_range_item
+       , contentitem TYPE soi_generic_item
+       .
+
+  rangeitem-name = name.
+  rangeitem-columns = column.
+  rangeitem-rows = row.
+  APPEND rangeitem TO lt_range.
+  contentitem-column = column.
+  contentitem-row = row.
+  contentitem-value = value.
+  APPEND contentitem TO lt_content.
+
+  lo_excel_iface->insert_range_dim(
+    EXPORTING
+      name     = name
+      top      = top
+      left     = left
+      rows     = 1
+      columns  = 1
+      no_flush = 'X'
+    IMPORTING
+      error    = lo_error
+      retcode  = lv_retcode ).
+
+  lo_excel_iface->set_ranges_data(
+    EXPORTING
+      no_flush = 'X'
+      ranges   = lt_range
+      contents = lt_content
+    IMPORTING
+      error    = lo_error
+      retcode  = lv_retcode ).
+ENDFORM.                    " INSERT_CELL_XLS
