@@ -1,0 +1,22 @@
+  DATA: okr(16) TYPE p DECIMALS 14,
+        dmb(16) TYPE p DECIMALS 14,
+        dmbtr_kom LIKE itab-dmbtr_kom.
+  DATA: total_absmg LIKE itab-absmg,
+    
+    LOOP AT itab WHERE vgbel = iitab-vgbel
+                   AND vgpos = iitab-vgpos
+                   AND absmg <> 0.
+      ADD itab-absmg TO total_absmg.
+    ENDLOOP.
+    CHECK: total_absmg <> 0.
+    "
+    okr = 0.
+    LOOP AT itab WHERE vgbel = iitab-vgbel
+                   AND vgpos = iitab-vgpos
+                   AND absmg <> 0.
+      dmb = itab-absmg / total_absmg * iitab-dmbtr_seb + okr.
+      dmbtr_seb = dmb.
+      okr = dmb - dmbtr_seb.
+      ADD dmbtr_seb TO itab-dmbtr_seb.
+      MODIFY itab TRANSPORTING dmbtr_seb.
+    ENDLOOP.
