@@ -1,0 +1,549 @@
+function zukk_extract.
+*"----------------------------------------------------------------------
+*"*"Локальный интерфейс:
+*"  IMPORTING
+*"     VALUE(I_BUKRS) TYPE  BUKRS
+*"     VALUE(I_INVNR) TYPE  ZEUKK_IN
+*"     VALUE(I_DEAKT) TYPE  ZEUKK_DATE_DOC OPTIONAL
+*"     VALUE(I_PROC_TYPE) TYPE  NUMC2
+*"     VALUE(I_UMTOID) TYPE  CHAR100
+*"  TABLES
+*"      ET_RETURN STRUCTURE  BAPIRET2
+*"----------------------------------------------------------------------
+
+  types: begin of ty_anla
+       , invnr type anla-invnr
+       , anln1 type anla-anln1
+       , anln2 type anla-anln2
+       , deakt type anla-deakt
+       , end of ty_anla
+       .
+  types: begin of ty_anep
+       , anln1 type anek-anln1
+       , anln2 type anek-anln2
+       , gjahr type anek-gjahr
+       , tcode type anek-tcode
+       , budat type anek-budat
+       , anbtr type anep-anbtr
+       , aufwv type anea-aufwv
+       , kbelnr like anep-belnr
+       , aworg like anek-aworg
+       , xblnr like anek-xblnr
+       , awtyp like anek-awtyp
+       , bwasl like anep-bwasl
+       , awkey like bkpf-awkey
+       , end of ty_anep
+       .
+  types: begin of ty_j3
+       , nbanlz like j_3rfanlzn-nbanlz
+       , anln1 like j_3rfanlzn-anln1
+       , anln2 like j_3rfanlzn-anln2
+       , bdatu like j_3rfanlzn-bdatu
+       , adatu like j_3rfanlzn-bdatu
+       , value_c01 like j_3rfanlzn-value_c01
+       , value_s01 like j_3rfanlzn-value_s01
+       , end of ty_j3
+       .
+  types: begin of ty_bkpf_key
+       , gjahr like anek-gjahr
+       , xblnr like anek-xblnr
+       , awtyp like anek-awtyp
+       , awkey like bkpf-awkey
+       , belnr like bkpf-belnr
+       , end of ty_bkpf_key
+       .
+  types: begin of ty_anlz
+       , anln1 like anlz-anln1
+       , anln2 like anlz-anln2
+       , bdatu like anlz-bdatu
+       , adatu like anlz-adatu
+       , kostl like anlz-kostl
+       , pernr like anlz-pernr
+       , werks like anlz-werks
+       , stort like anlz-stort
+       , end of ty_anlz
+       .
+  types: ty_spp type table of anlu-zzposnr2.
+
+  data: lt_anla type standard table of ty_anla
+      , ls_anla like line of lt_anla
+      , lt_anep type standard table of ty_anep
+      , ls_anep like line of lt_anep
+      , ls_anep_all like line of lt_anep
+      , ls_proc type ztukk_proc
+      , lv_subrc type sy-subrc value 4
+      , ls_return like line of et_return
+      , lt_j3 type standard table of ty_j3
+
+      , begin of ss occurs 0
+      , str(50)
+      , old(1)
+      , val(1)
+      , end of ss
+
+      , t type string occurs 0 with header line
+      , lv_fname like rlgrap-filename
+      , tt type string
+      , lv_sums(32)
+      , lv_sum type anep-anbtr
+      , lv_buffer(500)
+      , lr_deakt type range of anla-deakt
+      , ls_deakt like line of lr_deakt
+      , lt_bkey type standard table of ty_bkpf_key
+      , ls_bkey like line of lt_bkey
+      , lv_budat type anek-budat
+      , ls_j3 like line of lt_j3
+      , lt_anlz type standard table of ty_anlz
+      , ls_anlz like line of lt_anlz
+      , ls_anlz_prv like line of lt_anlz
+      , lt_bkpf type sorted table of ty_bkpf_key
+         with non-unique key gjahr xblnr awtyp awkey
+      , ls_bkpf like line of lt_bkpf
+      , lt_stoim01 type standard table of zfiaa_stoim_os
+      , ls_stoim like line of lt_stoim01
+      , lv_budats(10)
+      , lr_budat like range of anek-budat
+      , ls_budat like line of lr_budat
+      , lt_spp type ty_spp
+      .
+
+  select single *
+   from ztukk_proc
+   into ls_proc
+   where proc_type = i_proc_type.
+
+
+  ls_deakt = 'IEQ'.
+  ls_deakt-low = space.
+  append ls_deakt to lr_deakt.
+
+  ls_deakt = 'IEQ'.
+  ls_deakt-low = '00000000'.
+  append ls_deakt to lr_deakt. clear ls_deakt.
+
+  case i_proc_type.
+    when '19' or '20'.
+      perform parse changing i_invnr
+                             lt_spp.
+      delete lt_spp where table_line is initial.
+      if not lt_spp is initial.
+        select a~invnr a~anln1 a~anln2 a~deakt
+        from anla as a
+        join anlu as u on
+            a~bukrs eq u~bukrs
+        and a~anln1 eq u~anln1
+        and a~anln2 eq u~anln2
+        into table lt_anla
+        for all entries in lt_spp
+        where a~bukrs eq i_bukrs
+        and   u~zzposnr2 = lt_spp-table_line
+        and ( a~deakt ge i_deakt
+        or    a~deakt in lr_deakt ).
+        if sy-subrc ne 0.
+          message e006(zukk) into ls_return-message.
+          ls_return-type       = sy-msgty.
+          ls_return-id         = sy-msgid.
+          ls_return-number     = sy-msgno.
+          ls_return-message_v1 = sy-msgv1.
+          ls_return-message_v2 = sy-msgv2.
+          ls_return-message_v3 = sy-msgv3.
+          ls_return-message_v4 = sy-msgv4.
+          append ls_return to et_return.
+          exit.
+        endif.
+      endif.
+    when others.
+      select invnr anln1 anln2 deakt
+      from anla
+      into table lt_anla
+      where bukrs eq i_bukrs
+      and invnr eq i_invnr
+      and ( deakt ge i_deakt
+      or   deakt in lr_deakt ).
+  endcase.
+
+  if ls_proc-tcode = 'ABUMN'.
+    delete lt_anla where ( deakt le i_deakt and deakt ne space ).
+  endif.
+
+  if lt_anla is initial.
+    message e001(zukk) with i_invnr
+                       into ls_return-message.
+    ls_return-type       = sy-msgty.
+    ls_return-id         = sy-msgid.
+    ls_return-number     = sy-msgno.
+    ls_return-message_v1 = sy-msgv1.
+    ls_return-message_v2 = sy-msgv2.
+    ls_return-message_v3 = sy-msgv3.
+    ls_return-message_v4 = sy-msgv4.
+    append ls_return to et_return.
+    exit.
+  else.
+    select nbanlz
+            anln1
+            anln2
+            bdatu
+            adatu
+            value_c01
+            value_s01
+     from j_3rfanlzn
+     into table lt_j3
+     for all entries in lt_anla
+     where nbanlz in ('REPAIR', 'STATUS')
+       and bukrs = i_bukrs
+       and anln1 = lt_anla-anln1
+       and anln2 = lt_anla-anln2
+       and adatu le i_deakt
+       and bdatu ge i_deakt.
+
+    sort lt_j3 by anln1 anln2 bdatu descending.
+    delete adjacent duplicates from lt_j3 comparing anln1 anln2 bdatu.
+
+    call function 'SG_PS_GET_LAST_DAY_OF_MONTH'
+         exporting
+              day_in            = i_deakt
+         importing
+              last_day_of_month = lv_budat
+         exceptions
+              day_in_not_valid  = 1
+              others            = 2.
+    if sy-subrc <> 0.
+      message id sy-msgid type sy-msgty number sy-msgno
+              with sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    endif.
+
+    ls_budat = 'IBT'.
+    ls_budat-low = i_deakt.
+    ls_budat-low+6(2) = '01'.
+    ls_budat-high = lv_budat.
+    append ls_budat to lr_budat. clear ls_budat.
+
+    case ls_proc-prizn.
+      when '1'.
+        select k~anln1 k~anln2 k~gjahr k~tcode k~budat
+               p~anbtr a~aufwv k~belnr as kbelnr
+               k~aworg k~xblnr k~awtyp p~bwasl
+         from anek as k
+         join anep as p on
+             k~bukrs = p~bukrs
+         and k~anln1 = p~anln1
+         and k~anln2 = p~anln2
+         and k~gjahr = p~gjahr
+         and k~lnran = p~lnran
+         left join anea as a on
+             a~bukrs = p~bukrs
+         and a~anln1 = p~anln1
+         and a~anln2 = p~anln2
+         and a~gjahr = p~gjahr
+         and a~lnran = p~lnran
+         and a~afabe = p~afabe
+         and a~zujhr = p~zujhr
+         and a~zucod = p~zucod
+         into table lt_anep
+         for all entries in lt_anla
+         where k~bukrs eq i_bukrs
+         and k~anln1 = lt_anla-anln1
+         and k~anln2 = lt_anla-anln2
+         and p~afabe = '01'
+         and p~lnsan = space
+         and k~budat in lr_budat.
+        if sy-subrc ne 0.
+          message e002(zukk) with i_invnr
+                                 into ls_return-message.
+          ls_return-type       = sy-msgty.
+          ls_return-id         = sy-msgid.
+          ls_return-number     = sy-msgno.
+          ls_return-message_v1 = sy-msgv1.
+          ls_return-message_v2 = sy-msgv2.
+          ls_return-message_v3 = sy-msgv3.
+          ls_return-message_v4 = sy-msgv4.
+          append ls_return to et_return.
+          exit.
+        endif.
+    endcase.
+  endif.
+
+  loop at lt_anep into ls_anep.
+    concatenate ls_anep-kbelnr ls_anep-aworg into ls_anep-awkey.
+    check not ls_anep-awkey is initial.
+    modify lt_anep from ls_anep transporting awkey.
+    ls_bkey-gjahr = ls_anep-gjahr.
+    ls_bkey-xblnr = ls_anep-xblnr.
+    ls_bkey-awtyp = ls_anep-awtyp.
+    ls_bkey-awkey = ls_anep-awkey.
+    append ls_bkey to lt_bkey.
+  endloop.
+
+  if not lt_bkey is initial.
+    select gjahr
+           xblnr
+           awtyp
+           awkey
+           belnr
+   from bkpf
+   into table lt_bkpf
+   for all entries in lt_bkey
+   where bukrs = i_bukrs
+   and gjahr = lt_bkey-gjahr
+   and xblnr = lt_bkey-xblnr
+   and awtyp = lt_bkey-awtyp
+   and awkey = lt_bkey-awkey.
+  endif.
+
+  replace 'BBBB' with '++++' into ls_proc-tcode.
+  if sy-subrc eq 0.
+    lv_subrc = sy-subrc.
+  endif.
+  replace 'XXXX' with '++++' into ls_proc-tcode.
+  if sy-subrc eq 0.
+    lv_subrc = sy-subrc.
+  endif.
+
+  case ls_proc-prizn.
+    when '1'.
+      loop at lt_anep into ls_anep.
+        if not ls_proc-tcode is initial.
+          if lv_subrc eq 0.
+            check not ls_anep-tcode cp ls_proc-tcode.
+            delete lt_anep.
+          else.
+            perform casterisk using ls_proc-tcode changing lv_subrc.
+            if lv_subrc eq 0.
+              check not ls_anep-tcode cp ls_proc-tcode.
+              delete lt_anep.
+            else.
+              check not ls_anep-tcode eq ls_proc-tcode.
+              delete lt_anep.
+            endif.
+          endif.
+        endif.
+      endloop.
+      if lt_anep is initial.
+        message e003(zukk) with i_invnr
+                           into ls_return-message.
+        ls_return-type       = sy-msgty.
+        ls_return-id         = sy-msgid.
+        ls_return-number     = sy-msgno.
+        ls_return-message_v1 = sy-msgv1.
+        ls_return-message_v2 = sy-msgv2.
+        ls_return-message_v3 = sy-msgv3.
+        ls_return-message_v4 = sy-msgv4.
+        append ls_return to et_return.
+        exit.
+      endif.
+      loop at lt_anep into ls_anep.
+        lv_budat = ls_anep-budat.
+        exit.
+      endloop.
+    when '2'.
+      loop at lt_anla into ls_anla.
+        ls_stoim-bukrs = i_bukrs.
+        ls_stoim-anln1 = ls_anla-anln1.
+        ls_stoim-anln2 = ls_anla-anln2.
+        ls_stoim-gjahr = i_deakt(4).
+        collect ls_stoim into lt_stoim01. clear ls_stoim.
+      endloop.
+
+      call function 'ZFIAA_STOIM_OS'
+           exporting
+                p_bukrs        = i_bukrs
+                p_date         = lv_budat
+                p_afabe        = '01'
+                p_disp_process = space
+           tables
+                pt_stoim_os    = lt_stoim01.
+
+      case ls_proc-proc_type.
+        when '05'.
+          read table lt_j3 into ls_j3 with key nbanlz = 'REPAIR'.
+          lv_budat = ls_j3-adatu.
+          lv_sum = ls_j3-value_s01.
+        when '07'.
+          read table lt_j3 into ls_j3 with key nbanlz = 'STATUS'
+                                              value_c01 = 'КОНСЕРВАЦИЯ'.
+          lv_budat = ls_j3-adatu.
+        when '08'.
+          read table lt_j3 into ls_j3 with key nbanlz = 'STATUS'
+                                            value_c01 = 'ВЫВОД_ИЗ_КОНС'.
+          lv_budat = ls_j3-adatu.
+
+
+        when '10' or '14'.
+          select anln1
+              anln2
+              bdatu
+              adatu
+              kostl
+              pernr
+              werks
+              stort
+        from anlz
+        into table lt_anlz
+        for all entries in lt_anla
+        where bukrs eq i_bukrs
+        and   anln1 eq lt_anla-anln1
+        and   anln2 eq lt_anla-anln2
+        and   adatu le i_deakt.
+
+          sort lt_anlz by anln1
+                          anln2
+                        bdatu descending.
+          loop at lt_anlz into ls_anlz.
+            loop at lt_anlz into ls_anlz_prv where not (
+                        kostl = ls_anlz-kostl
+                    and pernr = ls_anlz-pernr
+                    and werks = ls_anlz-werks
+                    and stort = ls_anlz-stort ).
+              lv_budat = ls_anlz-adatu.
+              exit.
+            endloop.
+            exit.
+          endloop.
+      endcase.
+  endcase.
+
+  select single charval
+        from ztrlo_params_n
+        into lv_buffer
+        where orgst = i_bukrs
+          and parname = 'ZUKK_EXTRACT'
+          and activ = 'X'.
+
+  if lv_buffer is initial.
+    message s000(z0) with 'Ошибка настройки таблицы каталогов'.
+    ls_return-type       = sy-msgty.
+    ls_return-id         = sy-msgid.
+    ls_return-number     = sy-msgno.
+    ls_return-message_v1 = sy-msgv1.
+    ls_return-message_v2 = sy-msgv2.
+    ls_return-message_v3 = sy-msgv3.
+    ls_return-message_v4 = sy-msgv4.
+    append ls_return to et_return. clear ls_return.
+    exit.
+  else.
+    t = '<?xml version ="1.0" encoding ="windows-1251"?>'.
+    append t.
+    clear: t.
+    concatenate 'UKK_' i_bukrs '_'
+                         sy-datum '_' sy-uzeit into lv_fname.
+
+    _xml_beg '_SAPDocument'.
+    _xml_att 'xmlns:xsi' 'http://www.w3.org/2001/xmlschema-instance'.
+    _xml_att 'xmlns:xsd' 'http://www.w3.org/2001/xmlschema'.
+    _xml_beg '_Attribute'.
+    _xml_beg '_FolderType'.
+    _xml_val 'Учет ОС'.
+    _xml_end.
+    _xml_beg '_DocNum'.
+    _xml_val  i_invnr.
+    _xml_end.
+
+    _xml_beg '_IdPack'.
+    _xml_val  i_umtoid .
+    _xml_end.
+    if ls_proc-prizn = '1'.
+      loop at lt_anep into ls_anep.
+        loop at lt_anep into ls_anep_all.
+          lv_sum = lv_sum + ls_anep_all-anbtr + ls_anep_all-aufwv.
+        endloop.
+        lv_sums = abs( lv_sum ).
+        shift lv_sums left deleting leading space.
+        if lv_sum < 0.
+          concatenate '-' lv_sums into lv_sums.
+        endif.
+        _xml_beg '_SUM'.
+        _xml_val lv_sums.
+        _xml_end.
+
+        read table lt_bkpf into ls_bkpf with key gjahr = ls_anep-gjahr
+                                                 xblnr = ls_anep-xblnr
+                                                 awtyp = ls_anep-awtyp
+                                                 awkey = ls_anep-awkey.
+        if sy-subrc eq 0.
+          _xml_beg '_FiBELNR'.
+          _xml_val ls_bkpf-belnr.
+          _xml_end.
+
+          _xml_beg '_GJAHR'.
+          _xml_val ls_bkpf-gjahr.
+          _xml_end.
+        endif.
+        _xml_beg '_FiAABWASL'.
+        _xml_val ls_anep-bwasl.
+        _xml_end.
+        exit.
+      endloop.
+    elseif ls_proc-prizn = '2'.
+      if  ls_proc-proc_type = '05'.
+        lv_sums = abs( lv_sum ).
+        shift lv_sums left deleting leading space.
+        if lv_sum < 0.
+          concatenate '-' lv_sums into lv_sums.
+        endif.
+        _xml_beg '_SUM'.
+        _xml_val lv_sums.
+        _xml_end.
+      else.
+        loop at lt_stoim01 into ls_stoim.
+          lv_sum = ls_stoim-st_perv.
+          lv_sums = abs( lv_sum ).
+          shift lv_sums left deleting leading space.
+          if lv_sum < 0.
+            concatenate '-' lv_sums into lv_sums.
+          endif.
+          _xml_beg '_SUM'.
+          _xml_val lv_sums.
+          _xml_end.
+          exit.
+        endloop.
+      endif.
+    endif.
+    write lv_budat to lv_budats dd/mm/yyyy.
+    _xml_beg '_BUDAT'.
+    _xml_val lv_budats.
+    _xml_end.
+
+    _xml_end.
+    _xml_end.
+
+    concatenate lv_buffer '\' lv_fname '.XML' into lv_fname.
+    call function 'WS_DOWNLOAD'
+         exporting
+              filename                = lv_fname
+              filetype                = 'ASC'
+         tables
+              data_tab                = t
+         exceptions
+              invalid_filesize        = 1
+              invalid_table_width     = 2
+              invalid_type            = 3
+              no_batch                = 4
+              unknown_error           = 5
+              gui_refuse_filetransfer = 6
+              customer_error          = 7
+              others                  = 8.
+    if sy-subrc <> 0.
+      message id sy-msgid type sy-msgty number sy-msgno
+              with sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    endif.
+    message e004(zukk) with i_invnr into ls_return-message.
+    ls_return-type       = sy-msgty.
+    ls_return-id         = sy-msgid.
+    ls_return-number     = sy-msgno.
+    ls_return-message_v1 = sy-msgv1.
+    ls_return-message_v2 = sy-msgv2.
+    ls_return-message_v3 = sy-msgv3.
+    ls_return-message_v4 = sy-msgv4.
+    append ls_return to et_return. clear ls_return.
+
+    message e005(zukk) with lv_fname into ls_return-message.
+    ls_return-type       = sy-msgty.
+    ls_return-id         = sy-msgid.
+    ls_return-number     = sy-msgno.
+    ls_return-message_v1 = sy-msgv1.
+    ls_return-message_v2 = sy-msgv2.
+    ls_return-message_v3 = sy-msgv3.
+    ls_return-message_v4 = sy-msgv4.
+    append ls_return to et_return. clear ls_return.
+  endif.
+endfunction.
