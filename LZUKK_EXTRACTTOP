@@ -1,0 +1,56 @@
+function-pool zukk_extract.                 "MESSAGE-ID ..
+define _xml_beg.
+  read table ss index 1.
+  if sy-subrc = 0.
+    ss-old = 'X'.
+    modify ss index 1.
+  endif.
+  clear: ss.
+  ss-str = &1.
+  insert ss index 1.
+  if not t is initial.
+    concatenate t '>' into t.
+    append t.
+  endif.
+  concatenate '<' &1 into t.
+end-of-definition.
+
+define _xml_end.
+  read table ss index 1.
+  if ss-val is initial.
+    if ss-old = 'X'.
+      if not t is initial.
+        concatenate t '>' into t.
+        append t.
+      endif.
+      concatenate '</' ss-str '>' into t.
+      append t.
+    else.
+      concatenate t '/>' into t.
+      append t.
+    endif.
+    clear t.
+  else.
+    if not t is initial.
+      concatenate t  '</' ss-str '>' into t.
+      append t. clear t.
+    endif.
+  endif.
+  delete ss index 1.
+end-of-definition.
+
+
+define _xml_att.
+  concatenate &1 '="' &2 '"' into tt.
+  concatenate t tt into t separated by space.
+end-of-definition.
+
+define _xml_val.
+  concatenate t '>' &1 into t.
+  read table ss index 1.
+  if sy-subrc = 0.
+    ss-old = 'X'.
+    ss-val = 'X'.
+    modify ss index 1.
+  endif.
+end-of-definition.
