@@ -1,0 +1,53 @@
+*----------------------------------------------------------------------*
+***INCLUDE LZUKK_EXTRACTF01 .
+*----------------------------------------------------------------------*
+*&---------------------------------------------------------------------*
+*&      Form  casterisk
+*&---------------------------------------------------------------------*
+form casterisk using    p_lv
+               changing pc_subrc type sy-subrc.
+  data: lv_len type i
+      , lv_index type sy-index.
+  pc_subrc = 4.
+  lv_len = strlen( p_lv ).
+  while sy-index <= lv_len.
+    lv_index = sy-index - 1.
+    check p_lv+lv_index(1) = '*'.
+    pc_subrc = 0.
+    exit.
+  endwhile.
+endform.                    " casterisk
+*---------------------------------------------------------------------*
+*       FORM parse                                            *
+*---------------------------------------------------------------------*
+form parse changing p_instr
+                    pt_out type standard table.
+  split p_instr at ';' into table pt_out.
+*  DATA: ld_out TYPE REF TO data.
+*  FIELD-SYMBOLS <ls_out>.
+*
+*  DATA: lv_len TYPE i.
+*  DATA: lv_off TYPE i.
+*
+*  CREATE DATA ld_out LIKE LINE OF pt_out.
+*  CHECK sy-subrc EQ 0.
+*  ASSIGN ld_out->* TO <ls_out>.
+*
+*  lv_len = strlen( p_instr ).
+*  DO.
+*    CASE p_instr+lv_off(1).
+*      WHEN ';'.
+*        IF NOT <ls_out> IS INITIAL.
+*          APPEND <ls_out> TO pt_out. CLEAR <ls_out>.
+*        ENDIF.
+*      WHEN OTHERS.
+*        CONCATENATE <ls_out> p_instr+lv_off(1) INTO <ls_out>.
+*    ENDCASE.
+*    lv_off = sy-index.
+*    CHECK sy-index = lv_len.
+*    EXIT.
+*  ENDDO.
+*  IF NOT <ls_out> IS INITIAL.
+*    APPEND <ls_out> TO pt_out. CLEAR <ls_out>.
+*  ENDIF.
+endform.                    " parse
