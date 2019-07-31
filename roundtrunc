@@ -1,0 +1,4 @@
+TBL417_2	ZETP1_TBL417_2	DEC	17	2
+
+C_DEC value '0.5' type P decimals 1.
+TBL417_2 = trunc( abs( GT_OUT-TBL417_2 ) + C_DEC ).
