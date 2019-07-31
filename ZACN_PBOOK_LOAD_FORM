@@ -1,0 +1,3853 @@
+*&---------------------------------------------------------------------*
+*&  Include           ZACN_PBOOK_LOAD_FORM                             *
+*&---------------------------------------------------------------------*
+FORM check_file_exists  CHANGING p_file.
+  DATA: lv_file TYPE string  .
+  DATA: lv_result TYPE abap_bool .
+  lv_file = p_file .
+  CALL METHOD cl_gui_frontend_services=>file_exist
+    EXPORTING
+      file   = lv_file
+    RECEIVING
+      result = lv_result.
+  IF lv_result EQ abap_false .
+    CLEAR pa_file .
+    MESSAGE 'Введите действительное имя файла' TYPE 'E'  .
+  ENDIF.
+ENDFORM.                    " CHECK_FILE_EXISTS
+
+*&---------------------------------------------------------------------*
+*&      Form  CHECK_FILE_EXTENSION
+*&---------------------------------------------------------------------*
+FORM check_file_extension  CHANGING p_file.
+  DATA: lv_len TYPE i .
+  DATA: lv_lenx TYPE i .
+  DATA: lv_file TYPE string .
+  lv_file = p_file .
+  TRANSLATE lv_file TO UPPER CASE .
+  lv_lenx = lv_len = STRLEN( lv_file ) .
+  CHECK lv_lenx > 4 .
+  SUBTRACT 5 FROM lv_lenx .
+  SUBTRACT 4 FROM lv_len .
+  IF lv_file+lv_lenx(5) = '.XLSX' OR lv_file+lv_len(4) = '.XLS'.
+  ELSE .
+    CLEAR pa_file .
+    MESSAGE 'Введите файл типов: .XLS .XLSX' TYPE 'S' DISPLAY LIKE 'E'.
+  ENDIF.
+ENDFORM.                    " CHECK_FILE_EXTENSION
+
+*&---------------------------------------------------------------------*
+*&      Form  SET_FILE
+*&---------------------------------------------------------------------*
+FORM set_file  CHANGING p_file.
+  DATA: lv_desktop_directory TYPE string .
+  DATA: lt_filetable TYPE filetable WITH HEADER LINE .
+  DATA: lv_filter TYPE string VALUE  'Файлы EXCEL (*.xls)|*.xls|Файлы EXCEL (*.xlsx)|*.xlsx|Все файлы (*.*)|*.*|' .
+
+  DATA: lv_rc TYPE i .
+  CALL METHOD cl_gui_frontend_services=>get_desktop_directory
+    CHANGING
+      desktop_directory = lv_desktop_directory.
+
+  CALL METHOD cl_gui_cfw=>flush
+    EXCEPTIONS
+      cntl_system_error = 1
+      cntl_error        = 2
+      OTHERS            = 3.
+
+  CALL METHOD cl_gui_frontend_services=>file_open_dialog
+    EXPORTING
+      window_title      = 'Выберите файл'
+      file_filter       = lv_filter
+      multiselection    = abap_false
+      initial_directory = lv_desktop_directory
+    CHANGING
+      file_table        = lt_filetable[]
+      rc                = lv_rc.
+  CHECK lt_filetable[] IS NOT INITIAL .
+  READ TABLE lt_filetable INDEX 1 .
+  pa_file = lt_filetable .
+ENDFORM.                    " SET_FILE
+*&---------------------------------------------------------------------*
+*&      Form  MODIFY_SCREEN
+*&---------------------------------------------------------------------*
+FORM modify_screen .
+  IF ch_other = 'X' .
+    LOOP AT SCREEN.
+      IF screen-group1 = 'F1'.
+        screen-active = 1 .
+        MODIFY SCREEN .
+      ENDIF.
+    ENDLOOP.
+
+    IF ch_dog IS NOT INITIAL .
+      LOOP AT SCREEN.
+        IF screen-group1 = 'F2' OR screen-group1 = 'DAT'.
+          screen-active = 1 .
+          MODIFY SCREEN .
+        ENDIF.
+      ENDLOOP.
+    ELSE .
+      LOOP AT SCREEN.
+        IF screen-group1 = 'F2' OR screen-group1 = 'DAT'.
+          screen-active = 0 .
+          MODIFY SCREEN .
+        ENDIF.
+      ENDLOOP.
+    ENDIF .
+  ELSE .
+    LOOP AT SCREEN.
+      IF ch_dog IS NOT INITIAL.
+        IF screen-group1 = 'DAT'  .
+          screen-active = 1 .
+          MODIFY SCREEN .
+        ENDIF.
+      ELSE .
+        IF screen-group1 = 'DAT'  .
+          screen-active = 0 .
+          MODIFY SCREEN .
+        ENDIF.
+      ENDIF.
+      IF screen-group1 = 'F1'  .
+        screen-active = 0 .
+        MODIFY SCREEN .
+      ENDIF.
+    ENDLOOP.
+    LOOP AT SCREEN.
+      IF screen-group1 = 'F2'.
+        screen-active = 0 .
+        MODIFY SCREEN .
+      ENDIF.
+*(7770014713-00020329 AMKRYLOVA mod+
+      IF screen-group1 = 'DOG' AND ( sy-tcode <> 'ZVRD_REESTR_DOG' OR ch_rel = 'X' ).
+        screen-active = 0.
+      ENDIF.
+*)7770014713-00020329 AMKRYLOVA mod+
+    ENDLOOP.
+  ENDIF.
+*(7770014713-00020329 AMKRYLOVA mod+
+  IF sy-tcode EQ 'ZVRD_REESTR_DOG'.
+    LOOP AT SCREEN.
+      IF ( screen-name = 'CH_DOG' OR screen-group1 = 'F1' ).
+        screen-active = 0.
+        MODIFY SCREEN.
+      ENDIF.
+    ENDLOOP.
+  ENDIF.
+*)7770014713-00020329 AMKRYLOVA mod+
+ENDFORM.                    " MODIFY_SCREEN
+*&---------------------------------------------------------------------*
+*&      Form  GET_EXCEL_DATA
+*&---------------------------------------------------------------------*
+FORM get_excel_data .
+  DATA : lt_xls TYPE TABLE OF zalsmex_tabline .
+  DATA : ls_data TYPE REF TO data .
+  DATA : lv_tabx TYPE sy-tabix .
+  DATA : lv_row TYPE i .
+  DATA : lv_col TYPE alsmex_tabline-col ,
+         lv_text(50),
+         lv_row_err TYPE i.
+
+  FIELD-SYMBOLS: <ls_xls> TYPE zalsmex_tabline
+               , <ls_xls_end> TYPE zalsmex_tabline
+               , <l_field> TYPE ANY
+               , <ls_data> TYPE t_uploaded
+               .
+  DATA: BEGIN OF ls_dog_del,
+         naim_prod LIKE gt_uploaded-naim_prod,
+         ndtnk LIKE gt_uploaded-ndtnk,
+         qua_symb TYPE i,
+        END OF ls_dog_del,
+        lt_dog_del   LIKE TABLE OF ls_dog_del,
+        lv_begin_row TYPE i,
+        lv_begin_col TYPE i.
+
+  CONSTANTS: lc_begin_row TYPE i VALUE 12,
+             lc_end_col TYPE i VALUE 50,
+             lc_end_row TYPE i VALUE 65535.
+
+  IF p_old = 'X'.
+    lv_begin_col = 2.
+  ELSE.
+    lv_begin_col = 1.
+  ENDIF.
+  CALL FUNCTION 'ZALSM_EXCEL_TO_INTERNAL_TABLE'
+    EXPORTING
+      filename                = pa_file
+      i_begin_col             = lv_begin_col
+      i_begin_row             = lc_begin_row
+      i_end_col               = lc_end_col
+      i_end_row               = lc_end_row
+    TABLES
+      intern                  = lt_xls[]
+    EXCEPTIONS
+      inconsistent_parameters = 1
+      upload_ole              = 2
+      OTHERS                  = 3.
+  IF sy-subrc <> 0.
+    MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+  ENDIF.
+  IF lt_xls[] IS INITIAL .
+    MESSAGE 'Данные не загружены!' TYPE 'E' .
+  ENDIF.
+  CREATE DATA ls_data LIKE LINE OF gt_uploaded.
+  ASSIGN ls_data->* TO <ls_data>.
+
+  SORT lt_xls BY row col.
+**//7770020486-00022476
+  IF p_old = 'X'.
+*(7770035436-00031474  mod- AMKRYLOVA
+*    DELETE lt_xls WHERE NOT ( col = 1 OR col = 2 OR col = 3 OR col = 8 OR col = 11 OR col = 25 OR col = 32 OR col = 48 OR col = 49 ).
+*)7770035436-00031474  mod- AMKRYLOVA
+*(7770035436-00031474  mod+ AMKRYLOVA
+    DELETE lt_xls WHERE NOT ( col = 1 OR col = 2 OR
+                              col = 3 OR col = 7 OR
+                              col = 8 OR col = 14 OR
+                              col = 28 OR col = 35 OR
+                              col = 48 OR col = 49 OR
+                              col = 15 ). "7770025154-00027704
+*)7770035436-00031474  mod+ AMKRYLOVA
+  ELSE.
+    DELETE lt_xls WHERE NOT ( col = 1 OR col = 2 OR
+                              col = 3 OR col = 7 OR
+                              col = 9 OR col = 15 OR
+                              col = 16 OR col = 24 OR
+                              col = 31 OR col = 50 OR
+                              col = 51 )."7770035436-00031474 AMKRYLOVA mod+
+*(7770035436-00031474  mod- AMKRYLOVA
+*    DELETE lt_xls WHERE NOT ( col = 1 OR col = 2 OR col = 3 OR col = 8 OR col = 14 OR col = 28 OR col = 35 OR col = 48 OR col = 49
+*                              OR col = 15 ). "7770025154-00027704
+*)7770035436-00031474  mod- AMKRYLOVA
+  ENDIF.
+**\\7770020486-00022476
+
+  DATA: lv_tabix TYPE sy-tabix .
+  LOOP AT lt_xls ASSIGNING <ls_xls>.
+    AT NEW row.
+      CLEAR <ls_data>.
+    ENDAT.
+
+**//7770020486-00022476
+    IF p_old = 'X'.
+*      PERFORM change_col USING <ls_xls>-col CHANGING lv_col . "Подмена номеров колонок "7770035436-00031474 AMKRYLOVA mod-
+      PERFORM change_col_new USING <ls_xls>-col CHANGING lv_col . "Подмена номеров колонок "7770035436-00031474 AMKRYLOVA mod+
+    ELSE.
+*      PERFORM change_col_new USING <ls_xls>-col CHANGING lv_col . "Подмена номеров колонок "Подмена номеров колонок "7770035436-00031474 AMKRYLOVA mod-
+      PERFORM change_col_new_2014 USING <ls_xls>-col CHANGING lv_col . "Подмена номеров колонок "7770035436-00031474 AMKRYLOVA mod+
+    ENDIF.
+**\\7770020486-00022476
+
+    ASSIGN COMPONENT lv_col OF STRUCTURE <ls_data> TO <l_field>.
+    IF sy-subrc = 0.
+      TRY.
+        <l_field> = <ls_xls>-value.
+        CONDENSE <l_field>.
+        IF lv_col = '0002' AND <l_field> CO '0123456789 '.
+          UNPACK <l_field> TO <l_field> .
+        ELSEIF lv_col = '0010' AND p_old = space.
+          SPLIT <l_field> AT '/' INTO <l_field> lv_text.
+        ELSEIF lv_col = '0004' AND p_old = space.
+          SPLIT <l_field> AT space INTO <l_field> lv_text.
+          CONCATENATE lv_text <l_field> INTO <l_field> SEPARATED BY space.
+          SHIFT <l_field>  LEFT DELETING LEADING space.
+        ENDIF.
+      ENDTRY.
+    ELSE.
+      CONTINUE.
+    ENDIF.
+    AT END OF row .
+      ADD 1 TO lv_tabix .
+      <ls_data>-row_num = lv_tabix .
+      APPEND <ls_data> TO gt_uploaded .
+    ENDAT .
+  ENDLOOP.
+  DELETE gt_uploaded WHERE bukrs IS INITIAL OR gjahr IS INITIAL OR belnr IS INITIAL .
+
+*==> AVKorikov 18.02.2015 19:22:47 7770035436-00032091*
+  " Проверяем есть ли записи в Excel у которых не заполнено поле "№ п/п".
+  " Если есть - выдаем ошибку.
+  IF p_old IS INITIAL.  "Проверку выполнять только для нового формата 2014 г.
+    LOOP AT gt_uploaded WHERE npp IS INITIAL OR npp CN ' 0123456789' OR
+                            npp CO ' 0'.
+      MESSAGE e066(zetcvatexp) WITH sy-tabix.
+    ENDLOOP.
+  ENDIF.
+*<== AVKorikov*
+*(5550389412-00027803 Доработка программы AMKRYLOVA mod-
+*(7770014713-00020329 AMKRYLOVA mod+
+*  LOOP AT gt_uploaded WHERE ndtnk <> '*'.
+*    ls_dog_del-naim_prod = gt_uploaded-naim_prod.
+*    ls_dog_del-ndtnk = gt_uploaded-ndtnk.
+*    ls_dog_del-qua_symb = STRLEN( gt_uploaded-naim_prod ).
+*    APPEND ls_dog_del TO lt_dog_del.
+*  ENDLOOP.
+*  SORT lt_dog_del BY ndtnk qua_symb.
+*  DELETE ADJACENT DUPLICATES FROM lt_dog_del COMPARING ndtnk.
+*  LOOP AT gt_uploaded WHERE ndtnk <> '*'.
+*    READ TABLE lt_dog_del INTO ls_dog_del WITH KEY ndtnk = gt_uploaded-ndtnk.
+*    IF sy-subrc = 0.
+*      gt_uploaded-naim_prod = ls_dog_del-naim_prod.
+*      MODIFY gt_uploaded TRANSPORTING naim_prod.
+*    ENDIF.
+*  ENDLOOP.
+*)7770014713-00020329 AMKRYLOVA mod+
+*)5550389412-00027803 Доработка программы AMKRYLOVA mod-
+  PERFORM progress_indicator USING '15' 'Загрузка данных из EXCEL' .
+
+*{ 28001
+  PERFORM get_xls_header
+              USING
+                 pa_file
+              CHANGING
+                 gs_header.
+
+  READ TABLE gt_uploaded ASSIGNING <ls_data> INDEX 1.
+  IF sy-subrc = 0.
+    gs_header-bukrs = <ls_data>-bukrs.
+  ENDIF.
+*} 28001
+
+ENDFORM.                    " GET_EXCEL_DATA
+*&---------------------------------------------------------------------*
+*&      Form  CHANGE_COL
+*&---------------------------------------------------------------------*
+FORM change_col  USING    p_xls_col
+                 CHANGING p_col.
+  CASE p_xls_col.
+    WHEN  1 OR 2 OR 3 .
+      MOVE p_xls_col TO p_col .
+    WHEN  8 .
+      MOVE 4 TO p_col .
+    WHEN 11 .
+      MOVE 5 TO p_col .
+    WHEN 25 .
+      MOVE 6 TO p_col .
+    WHEN 32 .
+      MOVE 7 TO p_col .
+    WHEN 48 .
+      MOVE 8 TO p_col .
+    WHEN 49 .
+      MOVE 9 TO p_col .
+  ENDCASE.
+ENDFORM.                    " CHANGE_COL
+*&---------------------------------------------------------------------*
+*&      Form  SELECT_DATA
+*&---------------------------------------------------------------------*
+FORM select_data .
+  DATA : lt_bkpf TYPE STANDARD TABLE OF t_bkpf WITH HEADER LINE .
+  DATA : lv_len TYPE i .
+  DATA : gt_dog_tnk TYPE STANDARD TABLE OF t_dog_tnk WITH HEADER LINE .
+  DATA : lt_cvd TYPE STANDARD TABLE OF t_cvd WITH HEADER LINE .
+  DATA : BEGIN OF lt_gsbers OCCURS 0
+       , gsber LIKE bseg-gsber
+       , END OF lt_gsbers
+       .
+  DATA : lv_lines TYPE i .
+  DATA : lv_linest(12) .
+  DATA : lv_text(128) .
+  DATA : lv_perc TYPE i .
+  DATA : lr_symb TYPE RANGE OF c WITH HEADER LINE .
+  DATA : lt_uploaded LIKE STANDARD TABLE OF gt_uploaded WITH HEADER LINE .
+  lr_symb-sign = 'I' .
+  lr_symb-option = 'EQ' .
+  lr_symb-low = space .
+  APPEND lr_symb .
+  lr_symb-low = '*' .
+  APPEND lr_symb .
+  CLEAR lr_symb .
+  IF gt_uploaded[] IS NOT INITIAL.
+    LOOP AT gt_uploaded WHERE ndtnk IN lr_symb
+                           OR naim_prod IN lr_symb
+                           OR data_num_sch IN lr_symb .
+      IF gt_uploaded-ndtnk IN lr_symb .
+        gt_uploaded-ndtnk = 'Договор' .
+      ENDIF.
+      IF gt_uploaded-naim_prod IN lr_symb.
+        gt_uploaded-naim_prod = 'Контрагент' .
+      ENDIF.
+      IF gt_uploaded-data_num_sch IN lr_symb .
+        gt_uploaded-data_num_sch = 'Счет-фактура' .
+      ENDIF.
+      MODIFY gt_uploaded TRANSPORTING ndtnk naim_prod data_num_sch .
+    ENDLOOP.
+    lt_uploaded[] =  gt_uploaded[] .
+    DELETE lt_uploaded WHERE belnr IS INITIAL .
+    DELETE lt_uploaded WHERE belnr NOT BETWEEN '0000000000' AND '9999999999' .
+    IF lt_uploaded[] IS NOT INITIAL.
+      SELECT bukrs belnr gjahr blart bldat budat xblnr bktxt waers awtyp awkey
+      FROM bkpf INTO TABLE lt_bkpf
+      FOR ALL ENTRIES IN lt_uploaded
+      WHERE bukrs = lt_uploaded-bukrs
+      AND   belnr = lt_uploaded-belnr
+      AND   gjahr = lt_uploaded-gjahr .
+    ELSE .
+      MESSAGE 'Нет данных' TYPE 'E'  .
+    ENDIF.
+  ELSE .
+    MESSAGE 'Нет данных' TYPE 'E'  .
+  ENDIF.
+
+  SHIFT gv_gsbers LEFT DELETING LEADING ',' .
+  SHIFT gv_gsbers LEFT DELETING LEADING space .
+  lv_linest =  lv_lines = LINES( lt_bkpf[] ) .
+  SHIFT lv_linest LEFT DELETING LEADING space .
+*  BREAK-POINT .
+  LOOP AT lt_bkpf .
+    lv_perc = ( sy-tabix * 100 / lv_lines ) .
+    lv_text = sy-tabix .
+    SHIFT lv_text LEFT DELETING LEADING space .
+    CONCATENATE 'Обработано' lv_text 'из' lv_linest  INTO lv_text SEPARATED BY space .
+*{7770014713-00019910
+* Для тех случаев, когда пользователи ошибаются с видами документов для
+* налоговых агентов проверяем страну контрагента.. больше проверять нечего.
+
+    DATA:   lt_lifnr TYPE TABLE OF lifnr,
+      l_lifnr TYPE lifnr,
+      l_land1 TYPE lfa1-land1.
+    CLEAR l_lifnr.
+    CLEAR lt_lifnr.
+    CLEAR l_land1.
+
+    IF lt_bkpf-blart = 'KU' OR lt_bkpf-blart = 'AB'  OR lt_bkpf-blart = 'SA'.
+
+      SELECT lifnr FROM bseg
+          INTO TABLE lt_lifnr
+          WHERE bukrs = lt_bkpf-bukrs
+            AND belnr = lt_bkpf-belnr
+            AND gjahr = lt_bkpf-gjahr.
+      DELETE lt_lifnr WHERE table_line = space.
+
+*       читаем только одного контрагента, так как в таких документах не должно быть
+*       более одного кредитора
+      READ TABLE lt_lifnr INTO l_lifnr INDEX 1.
+
+      IF l_lifnr IS NOT INITIAL.
+        SELECT SINGLE land1 INTO l_land1
+        FROM lfa1
+        WHERE
+          lifnr = l_lifnr.
+*        Налоговые агенты могут быть только нерезиденты.
+*        Поэтому проверяем принадлежность к стране
+        IF sy-subrc EQ 0 AND l_land1 <> 'RU'.
+          lt_bkpf-blart = 'SA'.
+*         Если же это не налоговые агенты, то прогоним документы по алгоритму
+*         входящего счета
+        ELSEIF sy-subrc EQ 0 AND l_land1 = 'RU'.
+          lt_bkpf-awtyp = 'RMRP' .
+          lt_bkpf-blart = 'RE'.
+        ENDIF.
+      ELSE.
+        lt_bkpf-blart = 'AB'.
+      ENDIF.
+    ENDIF.
+*7770014713-00019910}
+
+    IF lt_bkpf-awtyp = 'RMRP' .
+      PERFORM find_corr USING lt_bkpf. "7770020486-00022476
+      PERFORM fill_link USING lt_bkpf-awtyp lt_bkpf .
+    ELSEIF ( lt_bkpf-blart = 'CA' OR lt_bkpf-blart = 'CS' ) AND lt_bkpf-bukrs = '4000' .
+      PERFORM find_corr USING lt_bkpf. "7770020486-00022476
+      PERFORM fill_link USING lt_bkpf-blart lt_bkpf .
+    ELSEIF  lt_bkpf-blart = 'ZO' OR lt_bkpf-blart = 'SO' .
+      PERFORM find_corr USING lt_bkpf. "7770020486-00022476
+      PERFORM fill_link USING lt_bkpf-blart lt_bkpf .
+    ELSEIF  lt_bkpf-blart = 'SA' OR lt_bkpf-blart =  'KU'.
+      PERFORM find_corr USING lt_bkpf. "7770020486-00022476
+      PERFORM fill_link USING lt_bkpf-blart lt_bkpf .
+    ELSEIF  lt_bkpf-blart = 'KT' OR lt_bkpf-blart = 'KZ' OR lt_bkpf-blart = 'DT' OR lt_bkpf-blart = 'DZ' .
+      PERFORM find_corr USING lt_bkpf. "7770020486-00022476
+      PERFORM fill_link USING lt_bkpf-blart lt_bkpf .
+    ELSE .
+      PERFORM find_corr USING lt_bkpf. "7770020486-00022476
+      PERFORM fill_link USING lt_bkpf-blart lt_bkpf .
+    ENDIF.
+    PERFORM progress_indicator USING lv_perc lv_text .
+  ENDLOOP.
+  SORT gt_link BY bukrs z_belnr z_gjahr belnr. "/?
+  DELETE ADJACENT DUPLICATES FROM gt_link COMPARING bukrs z_belnr z_gjahr belnr.
+  LOOP AT lt_bkpf .
+    LOOP AT gt_link WHERE bukrs = lt_bkpf-bukrs
+                    AND   belnr = lt_bkpf-belnr
+                    AND   gjahr = lt_bkpf-gjahr.
+      CONCATENATE lt_bkpf-z_lotus_key gt_link-z_lotus_key ',' INTO lt_bkpf-z_lotus_key.
+    ENDLOOP.
+    SHIFT lt_bkpf-z_lotus_key LEFT DELETING LEADING space .
+    lv_len = STRLEN( lt_bkpf-z_lotus_key ) .
+    SUBTRACT 1 FROM lv_len .
+    CHECK lv_len > 0 .
+    lt_bkpf-z_lotus_key+lv_len(1) = space .
+    MODIFY lt_bkpf TRANSPORTING z_lotus_key .
+  ENDLOOP.
+  DATA: lv_count TYPE i .
+*  LOOP AT lt_bkpf .
+*    ADD 1 TO lv_count .
+*    CLEAR gt_uploaded .
+*    READ TABLE gt_uploaded WITH KEY belnr = lt_bkpf-belnr
+*                                    gjahr = lt_bkpf-gjahr.
+*    CHECK sy-subrc EQ 0 .
+*    PERFORM convert_symbols: CHANGING gt_uploaded-naim_prod .
+*    PERFORM convert_symbols: CHANGING gt_uploaded-ndtnk .
+*    PERFORM convert_symbols: CHANGING lt_bkpf-xblnr .
+*    CONCATENATE '&#Книга покупок#Первичные документы#' gt_uploaded-naim_prod '#'
+*                 gt_uploaded-ndtnk '#' lt_bkpf-xblnr '##' lt_bkpf-z_lotus_key '&' INTO gt_rinvoice-path .
+*    IF ch_rel IS INITIAL.
+*      CONCATENATE '.\Книга покупок\Первичные документы\' gt_uploaded-naim_prod '\'  gt_uploaded-ndtnk
+*                                                                     INTO gt_rinvoice-hyperpath .
+*    ELSE .
+*      gt_rinvoice-hyperpath = gt_uploaded-invoice .
+*    ENDIF.
+*    gt_rinvoice-counter = lv_count .
+*    gt_rinvoice-DATA_NUM_SCH = gt_uploaded-DATA_NUM_SCH .
+*    gt_rinvoice-naim_prod = gt_uploaded-naim_prod .
+*    gt_rinvoice-ndtnk = gt_uploaded-ndtnk .
+*    APPEND gt_rinvoice .
+*    CLEAR gt_rinvoice .
+*  ENDLOOP.
+  DATA : lv_index TYPE sy-index .
+  LOOP AT gt_uploaded .
+    lv_index = sy-tabix .
+*    ADD 1 TO lv_count .
+    CLEAR lt_bkpf .
+    READ TABLE lt_bkpf WITH KEY belnr = gt_uploaded-belnr
+                                gjahr = gt_uploaded-gjahr.
+*    CHECK sy-subrc EQ 0 .
+    gt_rinvoice-data_num_sch2 = gt_uploaded-data_num_sch .
+    gt_rinvoice-naim_prod2 = gt_uploaded-naim_prod .
+    PERFORM convert_symbols: CHANGING gt_uploaded-naim_prod .
+
+**//7770025154-00027704
+    CONDENSE gt_uploaded-inn NO-GAPS.
+
+    IF gt_uploaded-inn IS INITIAL OR gt_uploaded-inn CN '0123456789 '.
+      gt_uploaded-inn = gt_uploaded-naim_prod.
+    ENDIF.
+**\\7770025154-00027704
+
+*(7770014713-00020329 AMKRYLOVA mod-
+*    perform CORRECT_LENGTH using GT_UPLOADED-BELNR
+*                                 GT_UPLOADED-BUKRS
+*                                 GT_UPLOADED-GJAHR
+*                    changing GT_UPLOADED-NAIM_PROD.
+*)7770014713-00020329 AMKRYLOVA mod-
+    PERFORM convert_symbols: CHANGING gt_uploaded-ndtnk .
+    PERFORM convert_symbols: CHANGING gt_uploaded-data_num_sch .
+    IF sy-tcode NE 'ZVRD_REESTR_DOG'."7770014713-00020329 AMKRYLOVA mod+
+
+**//7770025154-00027704
+*      CONCATENATE '&#Книга покупок#Первичные документы#' gt_uploaded-naim_prod '#'
+      CONCATENATE '&#ПД#' gt_uploaded-inn '#'
+**\\7770025154-00027704
+
+                  gt_uploaded-ndtnk '#' gt_uploaded-data_num_sch '##' lt_bkpf-z_lotus_key '&' INTO gt_rinvoice-path .
+*{7770014713-00019910
+
+**//7770025154-00027704
+*      CONCATENATE '&RC[-42]#Книга покупок#Первичные документы#' gt_uploaded-naim_prod '#'
+*                   gt_uploaded-ndtnk '#' gt_uploaded-data_num_sch '&RC[-18]#Книга покупок#Договоры#'
+*                    gt_uploaded-naim_prod '#' gt_uploaded-ndtnk '&'
+      IF p_old = 'X'.
+        CONCATENATE '&RC[-42]#ПД#' gt_uploaded-inn '#'
+                    gt_uploaded-ndtnk '#' gt_uploaded-data_num_sch '&RC[-18]#Договоры#'
+                     gt_uploaded-inn '#' gt_uploaded-ndtnk '&'
+                         INTO gt_rinvoice-path2 .
+      ELSE.
+        CONCATENATE '&RC[-42]#ПД#' gt_uploaded-inn '#'
+                    gt_uploaded-ndtnk '#' gt_uploaded-data_num_sch '&RC[-20]#Договоры#'
+                     gt_uploaded-inn '#' gt_uploaded-ndtnk '&'
+                         INTO gt_rinvoice-path2 .
+      ENDIF.
+**\\7770025154-00027704
+
+*7770014713-00019910}
+*(7770014713-00020329 AMKRYLOVA mod+
+    ELSE.
+      CONCATENATE '&#Первичные документы#' gt_uploaded-naim_prod '#'
+                   gt_uploaded-ndtnk '#' gt_uploaded-data_num_sch '##' lt_bkpf-z_lotus_key '&' INTO gt_rinvoice-path .
+*{7770014713-00019910
+      IF p_old = 'X'.
+        CONCATENATE '&RC[-42]#Первичные документы#' gt_uploaded-naim_prod '#'
+                     gt_uploaded-ndtnk '#' gt_uploaded-data_num_sch '&RC[-18]#Договоры#'
+                      gt_uploaded-naim_prod '#' gt_uploaded-ndtnk '&'
+         INTO gt_rinvoice-path2 .
+      ELSE.
+        CONCATENATE '&RC[-42]#Первичные документы#' gt_uploaded-naim_prod '#'
+                     gt_uploaded-ndtnk '#' gt_uploaded-data_num_sch '&RC[-20]#Договоры#'
+                      gt_uploaded-naim_prod '#' gt_uploaded-ndtnk '&'
+         INTO gt_rinvoice-path2 .
+      ENDIF.
+*7770014713-00019910}
+    ENDIF.
+*)7770014713-00020329 AMKRYLOVA mod+
+*    if CH_REL is initial.
+*      CONCATENATE '.\Книга покупок\Первичные документы\' gt_uploaded-naim_prod '\'  gt_uploaded-ndtnk
+*                                                                     INTO gt_rinvoice-hyperpath .
+    IF sy-tcode NE 'ZVRD_REESTR_DOG'."7770014713-00020329 AMKRYLOVA mod+
+**//7770025154-00027704
+*      CONCATENATE '.\Книга покупок\Первичные документы\' gt_uploaded-naim_prod '\'
+      CONCATENATE '.\ПД\' gt_uploaded-inn '\'
+**\\7770025154-00027704
+         gt_uploaded-ndtnk '\'  gt_uploaded-data_num_sch
+                                                                    INTO gt_rinvoice-hyperpath .
+*(7770014713-00020329 AMKRYLOVA mod+
+    ELSE.
+      CONCATENATE '.Первичные документы\' gt_uploaded-naim_prod '\'  gt_uploaded-ndtnk '\'  gt_uploaded-data_num_sch
+                                                                    INTO gt_rinvoice-hyperpath .
+    ENDIF.
+*)7770014713-00020329 AMKRYLOVA mod+
+*    else .
+*      GT_RINVOICE-HYPERPATH = GT_UPLOADED-INVOICE .
+*    endif.
+*    gt_rinvoice-counter = lv_count .
+    gt_rinvoice-data_num_sch = gt_uploaded-data_num_sch .
+    gt_rinvoice-naim_prod = gt_uploaded-naim_prod .
+    gt_rinvoice-ndtnk = gt_uploaded-ndtnk .
+    gt_rinvoice-row_id = gt_uploaded-row_num .
+    APPEND gt_rinvoice .
+    CLEAR gt_rinvoice .
+    MODIFY gt_uploaded  INDEX lv_index TRANSPORTING data_num_sch naim_prod ndtnk .
+  ENDLOOP.
+*  SORT gt_rinvoice BY DATA_NUM_SCH naim_prod path .
+*  DELETE ADJACENT DUPLICATES FROM gt_rinvoice COMPARING DATA_NUM_SCH naim_prod path .
+  LOOP AT gt_rinvoice .
+    gt_rinvoice-counter = sy-tabix .
+    MODIFY gt_rinvoice TRANSPORTING counter .
+  ENDLOOP.
+
+  CHECK ch_dog IS NOT INITIAL .
+  LOOP AT gt_uploaded.
+*    gt_dog_tnk = gt_uploaded .\
+    TRANSLATE gt_uploaded-ndtnk USING '_/' .
+    MOVE-CORRESPONDING gt_uploaded TO gt_dog_tnk .
+    APPEND gt_dog_tnk .
+    CLEAR gt_dog_tnk .
+  ENDLOOP.
+  SORT gt_dog_tnk BY bukrs  ndtnk naim_prod gsber .
+  DELETE ADJACENT DUPLICATES FROM gt_dog_tnk COMPARING bukrs ndtnk naim_prod gsber .
+
+  SELECT cvd gsber bukrs FROM zcvdd
+  INTO TABLE lt_cvd .
+  LOOP AT gt_dog_tnk .
+    PERFORM fill_link_tnk TABLES lt_cvd USING gt_dog_tnk .
+  ENDLOOP.
+  gt_dog_found_v2[] = gt_dog_found[] .
+  SORT gt_dog_found BY bukrs ndoc cvd .
+  DELETE ADJACENT DUPLICATES FROM gt_dog_found COMPARING bukrs ndoc cvd .
+
+  LOOP AT gt_dog_found .
+    PERFORM convert_symbols: CHANGING gt_dog_found-naim_prod .
+    PERFORM convert_symbols: CHANGING gt_dog_found-ndtnk .
+    WRITE: gt_dog_found-dpodp TO gt_dog_found-dpodp_str DD/MM/YYYY.
+    IF sy-tcode NE 'ZVRD_REESTR_DOG'."7770014713-00020329 AMKRYLOVA mod+
+**//7770025154-00027704
+*      CONCATENATE '\Книга покупок\Договоры\' gt_dog_found-naim_prod '\' gt_dog_found-ndtnk  '\'
+      CONCATENATE '\Договоры\' gt_dog_found-inn '\' gt_dog_found-ndtnk  '\'
+**\\7770025154-00027704
+*    ` ` 'от' ` `    gt_dog_found-DPODP_str '\'
+                  INTO gt_dog_found-path .
+**//7770025154-00027704
+*      CONCATENATE '&#Книга покупок#Договоры#' gt_dog_found-naim_prod '#' gt_dog_found-ndtnk  ` `  'от' ` `
+      CONCATENATE '&#Договоры#' gt_dog_found-inn '#' gt_dog_found-ndtnk  ` `  'от' ` `
+**\\7770025154-00027704
+
+                  gt_dog_found-dpodp_str '##' gt_dog_found-z_lotus_key '#&'
+                  INTO gt_dog_found-z_lotus_key .
+*(7770014713-00020329 AMKRYLOVA mod+
+    ELSE.
+      CONCATENATE '\Договоры\' gt_dog_found-naim_prod '\' gt_dog_found-ndtnk  '\'
+*    ` ` 'от' ` `    gt_dog_found-DPODP_str '\'
+                   INTO gt_dog_found-path .
+      CONCATENATE '&#Договоры#' gt_dog_found-naim_prod '#' gt_dog_found-ndtnk  ` `  'от' ` `
+                   gt_dog_found-dpodp_str '##' gt_dog_found-z_lotus_key '#&'
+                   INTO gt_dog_found-z_lotus_key .
+    ENDIF.
+*)7770014713-00020329 AMKRYLOVA mod+
+    MODIFY gt_dog_found TRANSPORTING z_lotus_key dpodp_str path .
+  ENDLOOP.
+*{_V2
+  LOOP AT gt_dog_found_v2 .
+    PERFORM convert_symbols: CHANGING gt_dog_found_v2-naim_prod .
+    PERFORM convert_symbols: CHANGING gt_dog_found_v2-ndtnk .
+    WRITE: gt_dog_found_v2-dpodp TO gt_dog_found_v2-dpodp_str DD/MM/YYYY.
+    IF sy-tcode NE 'ZVRD_REESTR_DOG'."7770014713-00020329 AMKRYLOVA mod+
+**//7770025154-00027704
+*      CONCATENATE '\Книга покупок\Договоры\' gt_dog_found_v2-naim_prod '\' gt_dog_found_v2-ndtnk  '\'
+      CONCATENATE '\Договоры\' gt_dog_found_v2-inn '\' gt_dog_found_v2-ndtnk  '\'
+
+**\\7770025154-00027704
+
+*    ` ` 'от' ` `    gt_dog_found-DPODP_str '\'
+                   INTO gt_dog_found_v2-path .
+**//7770025154-00027704
+*      CONCATENATE '&#Книга покупок#Договоры#' gt_dog_found_v2-naim_prod '#' gt_dog_found_v2-ndtnk  ` `  'от' ` `
+      CONCATENATE '&#Договоры#' gt_dog_found_v2-inn '#' gt_dog_found_v2-ndtnk  ` `  'от' ` `
+**\\7770025154-00027704
+                   gt_dog_found_v2-dpodp_str '##' gt_dog_found_v2-z_lotus_key '#&'
+                   INTO gt_dog_found_v2-z_lotus_key .
+*(7770014713-00020329 AMKRYLOVA mod+
+    ELSE.
+      CONCATENATE '\Договоры\' gt_dog_found_v2-naim_prod '\' gt_dog_found_v2-ndtnk  '\'
+*    ` ` 'от' ` `    gt_dog_found-DPODP_str '\'
+                   INTO gt_dog_found_v2-path .
+      CONCATENATE '&#Договоры#' gt_dog_found_v2-naim_prod '#' gt_dog_found_v2-ndtnk  ` `  'от' ` `
+                   gt_dog_found_v2-dpodp_str '##' gt_dog_found_v2-z_lotus_key '#&'
+                   INTO gt_dog_found_v2-z_lotus_key .
+    ENDIF.
+*)7770014713-00020329 AMKRYLOVA mod+
+    MODIFY gt_dog_found_v2 TRANSPORTING z_lotus_key dpodp_str path .
+  ENDLOOP.
+*_V2  }
+  PERFORM progress_indicator USING '30' 'Выборка данных' .
+ENDFORM.                    " SELECT_DATA
+*&---------------------------------------------------------------------*
+*&      Form  FILL_LINK
+*&---------------------------------------------------------------------*
+FORM fill_link USING p_type
+                     ps_bkpf TYPE t_bkpf .
+  DATA: BEGIN OF lt_rseg OCCURS 0
+     , lfbnr LIKE rseg-lfbnr
+     , lfgja LIKE rseg-lfgja
+     , END OF lt_rseg
+     .
+  DATA : BEGIN OF lt_bsak OCCURS 0
+       , lifnr LIKE bsak-lifnr
+       , augdt LIKE bsak-augdt
+       , augbl LIKE bsak-augbl
+       , END OF lt_bsak
+       .
+  DATA : BEGIN OF lt_bsak_cl OCCURS 0
+       , belnr LIKE bsak-belnr
+       , gjahr LIKE bsak-gjahr
+       , augbl LIKE bsak-augbl
+       , augdt LIKE bsak-augdt
+       , lifnr LIKE bsak-lifnr
+       , END OF lt_bsak_cl
+       .
+  DATA : lt_link_fi LIKE STANDARD TABLE OF gt_link WITH HEADER LINE .
+  DATA : lt_link_mm LIKE STANDARD TABLE OF gt_link WITH HEADER LINE .
+  DATA : lt_link LIKE STANDARD TABLE OF gt_link WITH HEADER LINE .
+  DATA : lt_url TYPE STANDARD TABLE OF t_url WITH HEADER LINE .
+  DATA : BEGIN OF lt_ztf OCCURS 0
+       , urlid LIKE ztfin_url-urlid
+       , url LIKE ztfin_url-url
+       , END OF lt_ztf
+       .
+  DATA : lv_tabix TYPE sy-tabix .
+  DATA : BEGIN OF lt_ztost OCCURS 0
+       , bukrs LIKE ztost_sec_int-bukrs
+       , belnr LIKE ztost_sec_int-belnr
+       , gjahr LIKE ztost_sec_int-gjahr
+       , END OF lt_ztost
+       .
+  DATA : BEGIN OF lt_hst OCCURS 0
+       , bukrs LIKE bkpf-bukrs
+       , belnr LIKE bkpf-belnr
+       , gjahr LIKE bkpf-gjahr
+       , END OF lt_hst
+       .
+  DATA : wa_link LIKE lt_link .
+  DATA : BEGIN OF ls_ztfis
+       , bukrs LIKE bkpf-bukrs
+       , belnr LIKE bkpf-belnr
+       , gjahr LIKE bkpf-gjahr
+       , END OF ls_ztfis
+       .
+  DATA : BEGIN OF lt_clr OCCURS 0
+       , belnr_dbt LIKE zbse_clr-belnr_dbt
+       , gjahr_dbt LIKE zbse_clr-gjahr_dbt
+       , belnr_pmt LIKE zbse_clr-belnr_pmt
+       , gjahr_pmt LIKE zbse_clr-gjahr_pmt
+       , END OF lt_clr
+       .
+
+*==> AVKorikov 18.02.2015 18:47:07 7770035436-00032091*
+  DATA: BEGIN OF ls_st_bkpf,
+          bukrs LIKE bkpf-bukrs,
+          belnr LIKE bkpf-belnr,
+          gjahr LIKE bkpf-gjahr,
+          stblg LIKE bkpf-stblg,
+          stjah LIKE bkpf-stjah,
+        END OF ls_st_bkpf.
+*<== AVKorikov*
+
+*==> AVKorikov 18.02.2015 18:53:46 7770035436-00032091*
+      SELECT SINGLE bukrs belnr gjahr stblg stjah
+        INTO ls_st_bkpf
+        FROM bkpf
+        WHERE bukrs = ps_bkpf-bukrs
+          AND belnr = ps_bkpf-belnr
+          AND gjahr = ps_bkpf-gjahr.
+
+      IF sy-subrc = 0 AND ls_st_bkpf-stblg IS NOT INITIAL.
+        lt_link-z_belnr = ls_st_bkpf-stblg.
+        lt_link-z_gjahr = ls_st_bkpf-stjah.
+        lt_link-bukrs = ps_bkpf-bukrs.
+        lt_link-belnr = ps_bkpf-belnr.
+        lt_link-gjahr = ps_bkpf-gjahr.
+        lt_link-z_type = 'FI'.
+        APPEND lt_link.
+        CLEAR lt_link.
+      ENDIF.
+*<== AVKorikov*
+
+  CASE p_type.
+    WHEN 'RMRP'.
+***Бухгалтерский документ
+      lt_link-z_belnr = ps_bkpf-belnr .
+      lt_link-z_gjahr = ps_bkpf-gjahr .
+      lt_link-bukrs = ps_bkpf-bukrs .
+      lt_link-belnr = ps_bkpf-belnr .
+      lt_link-gjahr = ps_bkpf-gjahr .
+      lt_link-z_type = 'FI' .
+      APPEND lt_link.
+      CLEAR lt_link.
+
+**//5550311543-00023126
+      IF ps_bkpf-blart = 'CA' OR ps_bkpf-blart = 'CS'.
+        DATA: lt_cacs LIKE TABLE OF lt_ztost.
+        FIELD-SYMBOLS: <fs_cacs> LIKE LINE OF lt_cacs.
+        FREE lt_cacs.
+
+        SELECT bukrs belnr gjahr INTO TABLE lt_cacs
+          FROM bkpf WHERE xblnr = ps_bkpf-xblnr
+                      AND bukrs = ps_bkpf-bukrs
+                      AND blart IN ('CA', 'CS')
+                      AND awtyp = ps_bkpf-awtyp
+                      AND bldat = ps_bkpf-bldat.
+        LOOP AT lt_cacs ASSIGNING <fs_cacs>.
+          lt_link-z_belnr = <fs_cacs>-belnr .
+          lt_link-z_gjahr = <fs_cacs>-gjahr .
+          lt_link-bukrs = ps_bkpf-bukrs .
+          lt_link-belnr = ps_bkpf-belnr .
+          lt_link-gjahr = ps_bkpf-gjahr .
+          lt_link-z_type = 'FI' .
+          APPEND lt_link .
+          CLEAR lt_link .
+        ENDLOOP.
+      ENDIF.
+**\\5550311543-00023126
+
+***Документ материала к которому привязан приходный ордер
+*      SELECT lfbnr lfgja FROM rseg INTO TABLE lt_rseg
+*      WHERE belnr = ps_bkpf-awkey(10)
+*      AND   gjahr = ps_bkpf-awkey+10(4) .
+*      LOOP AT lt_rseg .
+*        lt_link-z_belnr = lt_rseg-lfbnr .
+*        lt_link-z_gjahr = lt_rseg-lfgja .
+*        lt_link-bukrs = ps_bkpf-bukrs .
+*        lt_link-belnr = ps_bkpf-belnr .
+*        lt_link-gjahr = ps_bkpf-gjahr .
+*        lt_link-z_type = 'MM' .
+*        COLLECT lt_link .
+*        CLEAR lt_link .
+*      ENDLOOP.
+      DATA : BEGIN OF lt_ekbe OCCURS 0
+           , ebeln LIKE ekbe-ebeln
+           , ebelp LIKE ekbe-ebelp
+           , END OF lt_ekbe
+           .
+      DATA : BEGIN OF lt_ekbe2 OCCURS 0
+           , belnr LIKE ekbe-belnr
+           , gjahr LIKE ekbe-gjahr
+           , END OF lt_ekbe2
+           .
+      DATA : l_gsber LIKE bseg-gsber .
+      SELECT SINGLE gsber INTO l_gsber
+      FROM bseg
+      WHERE bukrs = ps_bkpf-bukrs
+      AND belnr = ps_bkpf-belnr
+      AND gjahr = ps_bkpf-gjahr
+      AND gsber IN ('1012', '1124', '1102') .
+
+      IF sy-subrc EQ 0.
+***Документ материала к которому привязан приходный ордер
+        REFRESH lt_rseg .
+        SELECT lfbnr lfgja FROM rseg INTO TABLE lt_rseg
+        WHERE belnr = ps_bkpf-awkey(10)
+        AND   gjahr = ps_bkpf-awkey+10(4) .
+        LOOP AT lt_rseg .
+          lt_link-z_belnr = lt_rseg-lfbnr .
+          lt_link-z_gjahr = lt_rseg-lfgja .
+          lt_link-bukrs = ps_bkpf-bukrs .
+          lt_link-belnr = ps_bkpf-belnr .
+          lt_link-gjahr = ps_bkpf-gjahr .
+          lt_link-z_type = 'MM' .
+          COLLECT lt_link .
+          CLEAR lt_link .
+        ENDLOOP.
+      ELSE.
+        SELECT ebeln ebelp FROM ekbe INTO TABLE lt_ekbe
+              WHERE belnr = ps_bkpf-awkey(10)
+              AND   gjahr = ps_bkpf-awkey+10(4) .
+        IF lt_ekbe[] IS NOT INITIAL.
+          SELECT belnr gjahr FROM   ekbe INTO TABLE lt_ekbe2
+          FOR ALL ENTRIES IN lt_ekbe
+          WHERE ebeln = lt_ekbe-ebeln
+          AND ebelp = lt_ekbe-ebelp
+          AND vgabe = 1.
+          LOOP AT lt_ekbe2.
+            lt_link-z_belnr = lt_ekbe2-belnr .
+            lt_link-z_gjahr = lt_ekbe2-gjahr .
+            lt_link-bukrs = ps_bkpf-bukrs .
+            lt_link-belnr = ps_bkpf-belnr .
+            lt_link-gjahr = ps_bkpf-gjahr .
+            lt_link-z_type = 'MM' .
+            COLLECT lt_link .
+            CLEAR lt_link .
+          ENDLOOP.
+        ENDIF.
+      ENDIF.
+***Платежное поручение
+*      BREAK MVMaksimovsk .
+      SELECT DISTINCT lifnr augdt augbl FROM bsak
+      INTO TABLE lt_bsak
+      WHERE bukrs = ps_bkpf-bukrs
+      AND   belnr = ps_bkpf-belnr
+      AND   gjahr = ps_bkpf-gjahr .
+      IF lt_bsak[] IS NOT INITIAL.
+*Снова выбираем из bsak все значения BELNR и GJAHR у записей, где
+        SELECT belnr gjahr  augbl augdt lifnr
+        FROM bsak
+        INTO TABLE lt_bsak_cl
+        FOR ALL ENTRIES IN lt_bsak
+        WHERE bukrs = ps_bkpf-bukrs
+        AND  augbl =  lt_bsak-augbl
+        AND  augdt =  lt_bsak-augdt
+        AND  lifnr = lt_bsak-lifnr
+        AND blart IN ('V1' , 'V2', 'VD').
+        LOOP AT lt_bsak_cl.
+          lt_link-z_belnr = lt_bsak_cl-belnr .
+          lt_link-z_gjahr = lt_bsak_cl-gjahr .
+          lt_link-bukrs = ps_bkpf-bukrs .
+          lt_link-belnr = ps_bkpf-belnr .
+          lt_link-gjahr = ps_bkpf-gjahr .
+          lt_link-z_type = 'FI' .
+          COLLECT lt_link .
+          CLEAR lt_link .
+        ENDLOOP.
+      ENDIF.
+      DELETE lt_link WHERE z_belnr IS INITIAL .
+      CHECK lt_link[] IS NOT INITIAL .
+      LOOP AT lt_link.
+        CASE lt_link-z_type.
+          WHEN 'FI'.
+            lt_link_fi = lt_link .
+            APPEND lt_link_fi .
+            CLEAR lt_link_fi .
+          WHEN 'MM'.
+            lt_link_mm = lt_link .
+            APPEND lt_link_mm .
+            CLEAR lt_link_mm .
+        ENDCASE.
+      ENDLOOP.
+      IF lt_link_fi[] IS NOT INITIAL.
+*        SELECT urlid bukrs_fi belnr_fi gjahr_fi FROM ZTFIN_URL_RELS
+*        APPENDING TABLE lt_url
+*        FOR ALL ENTRIES IN lt_link_fi
+*        WHERE bukrs_fi = lt_link_fi-bukrs
+*        AND   belnr_fi = lt_link_fi-z_belnr
+*        AND   gjahr_fi = lt_link_fi-z_gjahr
+*        AND   deleted = space .
+        PERFORM get_urls TABLES lt_link_fi USING 'FI'.
+      ENDIF.
+      IF lt_link_mm[] IS NOT INITIAL.
+*        SELECT urlid bukrs_fi mblnr_mm mjahr_mm FROM ZTFIN_URL_RELS
+*        APPENDING TABLE lt_url
+*        FOR ALL ENTRIES IN lt_link_mm
+*        WHERE bukrs_fi = lt_link_mm-bukrs
+*        AND   mblnr_mm = lt_link_mm-z_belnr
+*        AND   mjahr_mm = lt_link_mm-z_gjahr
+*        AND   deleted = space .
+        PERFORM get_urls TABLES lt_link_mm USING 'MM'.
+      ENDIF.
+*      LOOP AT lt_url .
+*        CLEAR lt_link .
+*        READ TABLE lt_link WITH KEY bukrs =   lt_url-bukrs
+*                                    z_belnr = lt_url-belnr
+*                                    z_gjahr = lt_url-gjahr .
+*        CHECK sy-subrc EQ 0 .
+*        lv_tabix = sy-tabix .
+*        IF lt_link-urlid IS INITIAL .
+*          lt_link-urlid = lt_url-urlid .
+*          MODIFY lt_link INDEX lv_tabix TRANSPORTING urlid .
+*        ELSE .
+*          lt_link-urlid = lt_url-urlid .
+*          APPEND lt_link .
+*        ENDIF.
+*      ENDLOOP.
+*      DELETE lt_link WHERE urlid IS INITIAL .
+*      IF lt_link[] IS NOT INITIAL.
+*        SELECT urlid url FROM ZTFIN_URL
+*        INTO TABLE lt_ztf
+*        FOR ALL ENTRIES IN lt_link
+*        WHERE urlid = lt_link-urlid .
+*        SORT lt_ztf BY urlid .
+*        LOOP AT lt_link .
+*          CLEAR lt_ztf .
+*          READ TABLE lt_ztf WITH KEY urlid = lt_link-urlid BINARY SEARCH .
+*          CHECK sy-subrc EQ 0 .
+*          lt_link-z_lotus_link = lt_ztf-url .
+*          MODIFY lt_link TRANSPORTING z_lotus_link .
+*        ENDLOOP.
+*      ENDIF.
+*      LOOP AT lt_link .
+*        SHIFT lt_link-z_belnr RIGHT DELETING TRAILING space .
+*        TRANSLATE lt_link-z_belnr USING ' 0' .
+*        CASE lt_link-z_type .
+*          WHEN 'FI'.
+*            CONCATENATE 'B' lt_link-bukrs lt_link-z_belnr lt_link-z_gjahr INTO lt_link-z_lotus_key .
+*          WHEN 'MM'.
+*            CONCATENATE 'LMTDOC'  lt_link-z_belnr lt_link-z_gjahr INTO lt_link-z_lotus_key .
+*        ENDCASE.
+*        MODIFY lt_link TRANSPORTING z_lotus_key .
+*      ENDLOOP.
+*      APPEND LINES OF lt_link TO gt_link .
+    WHEN 'CA' OR 'CS'.
+***Бухгалтерский документ
+      lt_link-z_belnr = ps_bkpf-belnr .
+      lt_link-z_gjahr = ps_bkpf-gjahr .
+      lt_link-bukrs = ps_bkpf-bukrs .
+      lt_link-belnr = ps_bkpf-belnr .
+      lt_link-gjahr = ps_bkpf-gjahr .
+      lt_link-z_type = 'FI' .
+      APPEND lt_link .
+      CLEAR lt_link .
+
+      SELECT SINGLE bukrs belnr gjahr
+      INTO (lt_link-bukrs, lt_link-z_belnr, lt_link-z_gjahr)
+      FROM bkpf
+      WHERE bukrs = ps_bkpf-bukrs
+      AND   belnr = ps_bkpf-bktxt+5(10)
+      AND   gjahr = ps_bkpf-bktxt(4) .
+      IF sy-subrc EQ 0.
+*        lt_link-z_belnr = lt_link-belnr .
+*        lt_link-z_gjahr = lt_link-gjahr .
+        lt_link-bukrs = ps_bkpf-bukrs .
+        lt_link-belnr = ps_bkpf-belnr .
+        lt_link-gjahr = ps_bkpf-gjahr .
+        lt_link-z_type = 'FI' .
+        APPEND lt_link .
+        SELECT bukrs d_belnr d_gjahr
+        FROM ztost_clear_hst
+        INTO TABLE lt_hst
+        WHERE bukrs = lt_link-bukrs
+        AND   d_belnr = lt_link-belnr
+        AND   d_gjahr = lt_link-gjahr .
+        CLEAR lt_link .
+        LOOP AT lt_hst.
+          lt_link-z_belnr = lt_hst-belnr .
+          lt_link-z_gjahr = lt_hst-gjahr .
+          lt_link-bukrs = lt_hst-bukrs .
+          lt_link-belnr = lt_hst-belnr .
+          lt_link-gjahr = lt_hst-gjahr .
+          lt_link-z_type = 'FI' .
+          APPEND lt_link .
+          CLEAR lt_link .
+        ENDLOOP.
+      ELSE .
+        SELECT DISTINCT bukrs belnr gjahr FROM ztost_sec_int
+        INTO TABLE lt_ztost
+        WHERE bukrs = lt_link-bukrs
+        AND   aljahr = lt_link-gjahr
+        AND   albeln = lt_link-belnr .
+        wa_link = lt_link .
+        CLEAR lt_link .
+        LOOP AT lt_ztost.
+          lt_link-z_belnr = lt_ztost-belnr .
+          lt_link-z_gjahr = lt_ztost-gjahr .
+          lt_link-bukrs = lt_ztost-bukrs .
+          lt_link-belnr = lt_ztost-belnr .
+          lt_link-gjahr = lt_ztost-gjahr .
+          lt_link-z_type = 'FI' .
+          APPEND lt_link .
+          CLEAR lt_link .
+        ENDLOOP.
+
+        SELECT bukrs d_belnr d_gjahr
+        FROM ztost_clear_hst
+        INTO TABLE lt_hst
+        WHERE bukrs = wa_link-bukrs
+        AND   d_belnr = wa_link-belnr
+        AND   d_gjahr = wa_link-gjahr .
+        CLEAR lt_link .
+        LOOP AT lt_hst.
+          lt_link-z_belnr = lt_hst-belnr .
+          lt_link-z_gjahr = lt_hst-gjahr .
+          lt_link-bukrs = lt_hst-bukrs .
+          lt_link-belnr = lt_hst-belnr .
+          lt_link-gjahr = lt_hst-gjahr .
+          lt_link-z_type = 'FI' .
+          APPEND lt_link .
+          CLEAR lt_link .
+        ENDLOOP.
+      ENDIF.
+      PERFORM get_urls TABLES lt_link USING 'FI'.
+*      SELECT urlid bukrs_fi belnr_fi gjahr_fi FROM ZTFIN_URL_RELS
+*      APPENDING TABLE lt_url
+*      FOR ALL ENTRIES IN lt_link
+*      WHERE bukrs_fi = lt_link-bukrs
+*      AND   belnr_fi = lt_link-z_belnr
+*      AND   gjahr_fi = lt_link-z_gjahr
+*      AND   deleted = space .
+*      LOOP AT lt_url .
+*        CLEAR lt_link .
+*        READ TABLE lt_link WITH KEY bukrs =   lt_url-bukrs
+*                                    z_belnr = lt_url-belnr
+*                                    z_gjahr = lt_url-gjahr .
+*        CHECK sy-subrc EQ 0 .
+*        lv_tabix = sy-tabix .
+*        IF lt_link-urlid IS INITIAL .
+*          lt_link-urlid = lt_url-urlid .
+*          MODIFY lt_link INDEX lv_tabix TRANSPORTING urlid .
+*        ELSE .
+*          lt_link-urlid = lt_url-urlid .
+*          APPEND lt_link .
+*        ENDIF.
+*      ENDLOOP.
+*      DELETE lt_link WHERE urlid IS INITIAL .
+*      IF lt_link[] IS NOT INITIAL.
+*        SELECT urlid url FROM ZTFIN_URL
+*        INTO TABLE lt_ztf
+*        FOR ALL ENTRIES IN lt_link
+*        WHERE urlid = lt_link-urlid .
+*        SORT lt_ztf BY urlid .
+*        LOOP AT lt_link .
+*          CLEAR lt_ztf .
+*          READ TABLE lt_ztf WITH KEY urlid = lt_link-urlid BINARY SEARCH .
+*          CHECK sy-subrc EQ 0 .
+*          lt_link-z_lotus_link = lt_ztf-url .
+*          MODIFY lt_link TRANSPORTING z_lotus_link .
+*        ENDLOOP.
+*      ENDIF.
+*      LOOP AT lt_link .
+*        SHIFT lt_link-z_belnr RIGHT DELETING TRAILING space .
+*        TRANSLATE lt_link-z_belnr USING ' 0' .
+*        CONCATENATE 'B' lt_link-bukrs lt_link-z_belnr lt_link-z_gjahr INTO lt_link-z_lotus_key .
+*        MODIFY lt_link TRANSPORTING z_lotus_key .
+*      ENDLOOP.
+*      APPEND LINES OF lt_link TO gt_link .
+    WHEN 'SO' OR 'ZO'.
+      lt_link-z_belnr = ps_bkpf-belnr .
+      lt_link-z_gjahr = ps_bkpf-gjahr .
+      lt_link-bukrs = ps_bkpf-bukrs .
+      lt_link-belnr = ps_bkpf-belnr .
+      lt_link-gjahr = ps_bkpf-gjahr .
+      lt_link-z_type = 'FI' .
+      APPEND lt_link .
+      CLEAR lt_link .
+      SELECT SINGLE bukrs belnr_clr gjahr_clr FROM ztfis_sumdiff
+      INTO ls_ztfis
+      WHERE bukrs = ps_bkpf-bukrs
+      AND  belnr_p = ps_bkpf-belnr
+      AND  gjahr_p = ps_bkpf-gjahr .
+      IF sy-subrc EQ 0.
+        SELECT belnr_dbt gjahr_dbt belnr_pmt gjahr_pmt
+        FROM   zbse_clr
+        INTO TABLE lt_clr
+        WHERE bukrs_clr = ls_ztfis-bukrs
+        AND   bukrs_dbt = ls_ztfis-bukrs
+        AND   bukrs_pmt = ls_ztfis-bukrs
+        AND   belnr_clr = ls_ztfis-belnr
+        AND   gjahr_clr = ls_ztfis-gjahr .
+        LOOP AT lt_clr.
+          lt_link-z_belnr = lt_clr-belnr_dbt .
+          lt_link-z_gjahr = lt_clr-gjahr_dbt.
+          lt_link-bukrs = ps_bkpf-bukrs .
+          lt_link-belnr = ps_bkpf-belnr .
+          lt_link-gjahr = ps_bkpf-gjahr .
+          lt_link-z_type = 'FI' .
+          APPEND lt_link .
+          CLEAR lt_link .
+        ENDLOOP.
+        LOOP AT lt_clr.
+          lt_link-z_belnr = lt_clr-belnr_pmt .
+          lt_link-z_gjahr = lt_clr-gjahr_pmt.
+          lt_link-bukrs = ps_bkpf-bukrs .
+          lt_link-belnr = ps_bkpf-belnr .
+          lt_link-gjahr = ps_bkpf-gjahr .
+          lt_link-z_type = 'FI' .
+          APPEND lt_link .
+          CLEAR lt_link .
+        ENDLOOP.
+        PERFORM get_urls TABLES lt_link USING 'FI'.
+      ENDIF.
+    WHEN 'SA' OR 'KU'.
+      DATA : BEGIN OF lt_zbs OCCURS 0
+           , belnr_pmt68 LIKE bkpf-belnr
+           , gjahr_pmt68 LIKE bkpf-gjahr
+           , bukrs_dbt LIKE bkpf-bukrs
+           , belnr_dbt LIKE bkpf-belnr
+           , gjahr_dbt LIKE bkpf-gjahr
+           , END OF lt_zbs
+           .
+      DATA : BEGIN OF lt_zbs2 OCCURS 0
+           , belnr_pmt68 LIKE bkpf-belnr
+           , gjahr_pmt68 LIKE bkpf-gjahr
+           , bukrs_dbt LIKE bkpf-bukrs
+           , belnr_dbt LIKE bkpf-belnr
+           , gjahr_dbt LIKE bkpf-gjahr
+           , END OF lt_zbs2
+           .
+      lt_link-z_belnr = ps_bkpf-belnr .
+      lt_link-z_gjahr = ps_bkpf-gjahr .
+      lt_link-bukrs = ps_bkpf-bukrs .
+      lt_link-belnr = ps_bkpf-belnr .
+      lt_link-gjahr = ps_bkpf-gjahr .
+      lt_link-z_type = 'FI' .
+      APPEND lt_link .
+      CLEAR lt_link .
+
+      SELECT belnr_pmt gjahr_pmt bukrs_dbt belnr_dbt gjahr_dbt
+       FROM   zbse_clr
+       INTO TABLE lt_zbs
+       WHERE bukrs_dbt = ps_bkpf-bukrs
+       AND belnr_dbt = ps_bkpf-belnr
+       AND gjahr_dbt =  ps_bkpf-gjahr .
+      IF lt_zbs[] IS NOT INITIAL.
+        SELECT belnr_pmt gjahr_pmt bukrs_dbt belnr_dbt gjahr_dbt
+        FROM   zbse_clr
+        INTO TABLE lt_zbs2
+        FOR ALL ENTRIES IN lt_zbs
+        WHERE bukrs_pmt = lt_zbs-bukrs_dbt
+        AND belnr_pmt = lt_zbs-belnr_pmt68
+        AND gjahr_pmt =  lt_zbs-gjahr_pmt68
+        AND belnr_dbt <> ps_bkpf-belnr   .
+        LOOP AT lt_zbs2.
+          lt_link-z_belnr = lt_zbs2-belnr_pmt68 .
+          lt_link-z_gjahr = lt_zbs2-gjahr_pmt68 .
+          lt_link-bukrs = ps_bkpf-bukrs .
+          lt_link-belnr = ps_bkpf-belnr .
+          lt_link-gjahr = ps_bkpf-gjahr .
+          lt_link-z_type = 'FI' .
+          APPEND lt_link .
+          CLEAR lt_link .
+        ENDLOOP.
+      ENDIF.
+      IF lt_zbs[] IS NOT INITIAL.
+        DATA : BEGIN OF lt_bsas OCCURS 0
+             , hkont LIKE bsas-hkont
+             , augbl LIKE bsas-augbl
+             , budat LIKE bsas-budat
+             , bldat LIKE bsas-bldat
+             , bukrs LIKE bsas-bukrs
+             , gjahr LIKE bsas-gjahr
+             , belnr LIKE bsas-belnr
+             , fl
+             , END OF lt_bsas
+             .
+        DATA : lt_bsas2 LIKE STANDARD TABLE OF lt_bsas WITH HEADER LINE .
+        SELECT hkont augbl budat bldat bukrs gjahr belnr
+        FROM bsas
+        INTO TABLE lt_bsas
+        FOR ALL ENTRIES IN lt_zbs
+        WHERE bukrs = ps_bkpf-bukrs
+        AND belnr = lt_zbs-belnr_pmt68
+        AND gjahr =  lt_zbs-gjahr_pmt68
+        AND hkont BETWEEN '0680000000' AND '0689999999' .
+      ENDIF.
+      IF lt_bsas[] IS NOT INITIAL.
+        SELECT hkont augbl budat bldat bukrs gjahr belnr
+        FROM bsas
+        INTO TABLE lt_bsas2
+        FOR ALL ENTRIES IN lt_bsas
+        WHERE bukrs = ps_bkpf-bukrs
+        AND hkont = lt_bsas-hkont
+        AND augbl = lt_bsas-augbl
+        AND budat = lt_bsas-budat
+        AND bldat = lt_bsas-bldat .
+**        LOOP AT lt_zbs2 .
+**          LOOP AT lt_bsas2 WHERE belnr <> lt_zbs2-BELNR_PMT68 .
+**            lt_bsas2-fl = '$' .
+**            MODIFY lt_bsas2 TRANSPORTING fl .
+**          ENDLOOP.
+**        ENDLOOP.
+***        IF sy-SUBRC EQ 0.
+**        DELETE lt_bsas2 WHERE fl IS INITIAL .
+        LOOP AT lt_bsas2 .
+          lt_link-z_belnr = lt_bsas2-belnr .
+          lt_link-z_gjahr = lt_bsas2-gjahr .
+          lt_link-bukrs = ps_bkpf-bukrs .
+          lt_link-belnr = ps_bkpf-belnr .
+          lt_link-gjahr = ps_bkpf-gjahr .
+          lt_link-z_type = 'FI' .
+          APPEND lt_link .
+          CLEAR lt_link .
+        ENDLOOP.
+*        ELSE .
+        LOOP AT lt_bsas .
+          lt_link-z_belnr = lt_bsas-belnr .
+          lt_link-z_gjahr = lt_bsas-gjahr .
+          lt_link-bukrs = ps_bkpf-bukrs .
+          lt_link-belnr = ps_bkpf-belnr .
+          lt_link-gjahr = ps_bkpf-gjahr .
+          lt_link-z_type = 'FI' .
+          APPEND lt_link .
+          CLEAR lt_link .
+        ENDLOOP.
+*        ENDIF.
+      ENDIF .
+* ищем документы  в валюте
+      DATA : BEGIN OF lt_xblnr OCCURS 0
+           , belnr LIKE bkpf-belnr
+           , gjahr LIKE bkpf-gjahr
+           , bukrs LIKE bkpf-bukrs
+           , xblnr LIKE bkpf-xblnr
+           , blart LIKE bkpf-blart
+           , END OF lt_xblnr
+           .
+*  { aaariskin 5550366197-00026516
+      DATA: lv_vptnr1 TYPE bseg-vptnr,      " партнер
+            lv_vptnr2 TYPE bseg-vptnr,      "
+            ls_xblnr LIKE lt_xblnr.
+      SELECT belnr gjahr bukrs xblnr blart FROM bkpf
+      INTO TABLE lt_xblnr
+      WHERE bukrs = ps_bkpf-bukrs
+      AND   xblnr = ps_bkpf-xblnr
+      AND   gjahr = ps_bkpf-budat(4)"AMKRYLOVA mod+ 5550379162-00027247 01.07.2013
+      AND   blart EQ 'KR'  .
+      IF sy-subrc = 0.
+*           выбираем партнера по нашим данным структуры ps_bkpf
+        SELECT SINGLE vptnr FROM bseg
+          INTO lv_vptnr2
+          WHERE bukrs = ps_bkpf-bukrs
+          AND   belnr = ps_bkpf-belnr
+          AND   gjahr = ps_bkpf-gjahr.
+        LOOP AT lt_xblnr INTO ls_xblnr.
+*           выбираем партнера по найденным данным lt_xblnr
+          SELECT SINGLE vptnr FROM bseg
+            INTO lv_vptnr1
+            WHERE bukrs = ls_xblnr-bukrs
+            AND   belnr = ls_xblnr-belnr
+            AND   gjahr = ls_xblnr-gjahr.
+*          Если найденные партнеры одинаковы, то добавляем ссылку
+          IF lv_vptnr1 = lv_vptnr2.
+*(AMKRYLOVA mod- 5550379162-00027247 01.07.2013
+*             LOOP AT lt_xblnr .
+*               lt_link-z_belnr = lt_xblnr-belnr .
+*               lt_link-z_gjahr = lt_xblnr-gjahr .
+*)AMKRYLOVA mod- 5550379162-00027247 01.07.2013
+*(AMKRYLOVA mod+ 5550379162-00027247 01.07.2013
+            lt_link-z_belnr = ls_xblnr-belnr .
+            lt_link-z_gjahr = ls_xblnr-gjahr .
+*)AMKRYLOVA mod+ 5550379162-00027247 01.07.2013
+            lt_link-bukrs = ps_bkpf-bukrs .
+            lt_link-belnr = ps_bkpf-belnr .
+            lt_link-gjahr = ps_bkpf-gjahr .
+            lt_link-z_type = 'FI' .
+            APPEND lt_link .
+            CLEAR lt_link .
+*             ENDLOOP."AMKRYLOVA mod- 5550379162-00027247 01.07.2013
+          ENDIF.
+        ENDLOOP.
+      ENDIF.
+*  } aaariskin 5550366197-00026516
+*Ищем оплату для найденных документов
+      DATA : BEGIN OF lt_zbse OCCURS 0
+           , belnr_pmt LIKE zbse_clr-belnr_pmt
+           , gjahr_pmt LIKE zbse_clr-gjahr_pmt
+           , END OF lt_zbse
+           .
+**      IF lt_xblnr[] IS NOT INITIAL.
+**        SELECT belnr_pmt gjahr_pmt FROM zbse_clr
+**        INTO TABLE lt_zbse
+**        FOR ALL ENTRIES IN lt_xblnr
+**        WHERE bukrs_dbt = ps_bkpf-bukrs
+**        AND   belnr_dbt = lt_xblnr-belnr
+**        AND   gjahr_dbt = lt_xblnr-gjahr
+**        AND   bukrs_pmt = ps_bkpf-bukrs
+**        AND   bukrs_clr = ps_bkpf-bukrs  .
+**        LOOP AT lt_zbse .
+**          lt_link-z_belnr = lt_zbse-belnr_pmt .
+**          lt_link-z_gjahr = lt_zbse-gjahr_pmt .
+**          lt_link-bukrs = ps_bkpf-bukrs .
+**          lt_link-belnr = ps_bkpf-belnr .
+**          lt_link-gjahr = ps_bkpf-gjahr .
+**          lt_link-z_type = 'FI' .
+**          APPEND lt_link .
+**          CLEAR lt_link .
+**        ENDLOOP.
+**      ENDIF.
+      IF lt_link[] IS NOT INITIAL.
+        SELECT belnr_pmt gjahr_pmt FROM zbse_clr
+        INTO TABLE lt_zbse
+        FOR ALL ENTRIES IN lt_link
+        WHERE bukrs_dbt = ps_bkpf-bukrs
+        AND   belnr_dbt = lt_link-belnr
+        AND   gjahr_dbt = lt_link-gjahr
+        AND   bukrs_pmt = ps_bkpf-bukrs
+        AND   bukrs_clr = ps_bkpf-bukrs  .
+        LOOP AT lt_zbse .
+          lt_link-z_belnr = lt_zbse-belnr_pmt .
+          lt_link-z_gjahr = lt_zbse-gjahr_pmt .
+          lt_link-bukrs = ps_bkpf-bukrs .
+          lt_link-belnr = ps_bkpf-belnr .
+          lt_link-gjahr = ps_bkpf-gjahr .
+          lt_link-z_type = 'FI' .
+          APPEND lt_link .
+          CLEAR lt_link .
+        ENDLOOP.
+      ENDIF.
+      PERFORM get_urls TABLES lt_link USING 'FI'.
+    WHEN 'KT' OR 'KZ' OR 'DT' OR 'DZ' .
+* ветка для документов выравнивания.
+      lt_link-z_belnr = ps_bkpf-belnr .
+      lt_link-z_gjahr = ps_bkpf-gjahr .
+      lt_link-bukrs = ps_bkpf-bukrs .
+      lt_link-belnr = ps_bkpf-belnr .
+      lt_link-gjahr = ps_bkpf-gjahr .
+      lt_link-z_type = 'FI' .
+      APPEND lt_link .
+      CLEAR lt_link .
+
+*Ищем в таблице ZBSE_CLR значение полей
+      DATA: BEGIN OF lt_zbse2 OCCURS 0
+          , belnr_dbt LIKE zbse_clr-belnr_dbt
+          , gjahr_dbt LIKE zbse_clr-gjahr_dbt
+          , belnr_pmt LIKE zbse_clr-belnr_pmt
+          , gjahr_pmt LIKE zbse_clr-gjahr_pmt
+          , END OF lt_zbse2
+          .
+      SELECT belnr_dbt gjahr_dbt belnr_pmt gjahr_pmt
+      FROM zbse_clr INTO TABLE lt_zbse2
+      WHERE bukrs_clr = ps_bkpf-bukrs
+      AND belnr_clr = ps_bkpf-belnr
+      AND gjahr_clr = ps_bkpf-gjahr
+      AND bukrs_dbt = ps_bkpf-bukrs
+      AND bukrs_pmt = ps_bkpf-bukrs .
+      LOOP AT lt_zbse2.
+        lt_link-z_belnr = lt_zbse2-belnr_dbt .
+        lt_link-z_gjahr = lt_zbse2-gjahr_dbt .
+        lt_link-bukrs = ps_bkpf-bukrs .
+        lt_link-belnr = ps_bkpf-belnr .
+        lt_link-gjahr = ps_bkpf-gjahr .
+        lt_link-z_type = 'FI' .
+        APPEND lt_link .
+        CLEAR lt_link .
+      ENDLOOP.
+      LOOP AT lt_zbse2.
+        lt_link-z_belnr = lt_zbse2-belnr_pmt .
+        lt_link-z_gjahr = lt_zbse2-gjahr_pmt .
+        lt_link-bukrs = ps_bkpf-bukrs .
+        lt_link-belnr = ps_bkpf-belnr .
+        lt_link-gjahr = ps_bkpf-gjahr .
+        lt_link-z_type = 'FI' .
+        APPEND lt_link .
+        CLEAR lt_link .
+      ENDLOOP.
+**Для документов BELNR_DBT и GJAHR_DBT ищем данные заголовка из BKPF:
+      DATA: BEGIN OF lt_bkpf OCCURS 0
+          , bldat LIKE bkpf-bldat
+          , xblnr LIKE bkpf-xblnr
+          , belnr LIKE bkpf-belnr
+          , gjahr LIKE bkpf-gjahr
+          , znp LIKE zunibr_platdocs-znp
+          , END OF lt_bkpf
+          .
+      IF lt_zbse2[] IS NOT INITIAL.
+        SELECT bldat xblnr belnr gjahr FROM bkpf
+        INTO TABLE lt_bkpf
+        FOR ALL ENTRIES IN lt_zbse2
+        WHERE bukrs = ps_bkpf-bukrs
+        AND   belnr = lt_zbse2-belnr_dbt
+        AND   gjahr = lt_zbse2-gjahr_dbt .
+      ENDIF.
+      DATA : BEGIN OF lt_plat OCCURS 0
+           , belnr_fi LIKE zunibr_platdocs-belnr_fi
+           , gjahr_fi LIKE zunibr_platdocs-gjahr_fi
+           , END OF lt_plat
+           .
+      IF lt_bkpf[] IS NOT INITIAL.
+        LOOP AT lt_bkpf.
+          lt_bkpf-znp = lt_bkpf-xblnr .
+          MODIFY lt_bkpf TRANSPORTING znp .
+        ENDLOOP.
+        SELECT belnr_fi gjahr_fi FROM zunibr_platdocs
+        INTO TABLE lt_plat
+        FOR ALL ENTRIES IN lt_bkpf
+        WHERE bukrs = ps_bkpf-bukrs
+        AND  znp = lt_bkpf-znp
+        AND  zpdate = lt_bkpf-bldat
+        AND  belnr_62 = lt_bkpf-belnr
+        AND  gjahr_62 = lt_bkpf-gjahr  .
+      ENDIF.
+      LOOP AT lt_plat.
+        lt_link-z_belnr = lt_plat-belnr_fi .
+        lt_link-z_gjahr = lt_plat-gjahr_fi .
+        lt_link-bukrs = ps_bkpf-bukrs .
+        lt_link-belnr = ps_bkpf-belnr .
+        lt_link-gjahr = ps_bkpf-gjahr .
+        lt_link-z_type = 'FI' .
+        APPEND lt_link .
+        CLEAR lt_link .
+      ENDLOOP.
+      PERFORM get_urls TABLES lt_link USING 'FI'.
+    WHEN OTHERS .
+*ветка для документов выравнивания и документов, которые были проведены не по правилам.
+      lt_link-z_belnr = ps_bkpf-belnr .
+      lt_link-z_gjahr = ps_bkpf-gjahr .
+      lt_link-bukrs = ps_bkpf-bukrs .
+      lt_link-belnr = ps_bkpf-belnr .
+      lt_link-gjahr = ps_bkpf-gjahr .
+      lt_link-z_type = 'FI' .
+      APPEND lt_link .
+      CLEAR lt_link .
+
+      DATA: BEGIN OF lt_bseg OCCURS 0
+          , buzei TYPE bseg-buzei
+          , END OF lt_bseg
+          , it_bse_clr TYPE TABLE OF bse_clr WITH HEADER LINE.
+      IF ps_bkpf-blart NE 'NN' AND ps_bkpf-blart NE 'KR'.
+        CALL FUNCTION 'Z_GET_BSE_CLR'
+          EXPORTING
+            bukrs     = ps_bkpf-bukrs
+            belnr     = ps_bkpf-belnr
+            gjahr     = ps_bkpf-gjahr
+            shkzg     = 'H'
+            sumop     = ''
+          TABLES
+            bse_clr_t = it_bse_clr[].
+
+
+        IF it_bse_clr[] IS NOT INITIAL.
+          LOOP AT it_bse_clr.
+            lt_link-z_belnr = it_bse_clr-belnr .
+            lt_link-z_gjahr = it_bse_clr-gjahr .
+            lt_link-bukrs = ps_bkpf-bukrs .
+            lt_link-belnr = ps_bkpf-belnr .
+            lt_link-gjahr = ps_bkpf-gjahr .
+            lt_link-z_type = 'FI' .
+            APPEND lt_link .
+            CLEAR lt_link .
+          ENDLOOP.
+          CLEAR it_bse_clr[].
+        ENDIF.
+        CALL FUNCTION 'Z_GET_BSE_CLR'
+          EXPORTING
+            bukrs     = ps_bkpf-bukrs
+            belnr     = ps_bkpf-belnr
+            gjahr     = ps_bkpf-gjahr
+            shkzg     = 'S'
+            sumop     = ''
+          TABLES
+            bse_clr_t = it_bse_clr[].
+        IF it_bse_clr[] IS NOT INITIAL.
+          LOOP AT it_bse_clr.
+            lt_link-z_belnr = it_bse_clr-belnr .
+            lt_link-z_gjahr = it_bse_clr-gjahr .
+            lt_link-bukrs = ps_bkpf-bukrs .
+            lt_link-belnr = ps_bkpf-belnr .
+            lt_link-gjahr = ps_bkpf-gjahr .
+            lt_link-z_type = 'FI' .
+            APPEND lt_link .
+            CLEAR lt_link .
+          ENDLOOP.
+          CLEAR it_bse_clr[].
+        ENDIF.
+
+        SELECT buzei FROM bseg INTO TABLE lt_bseg
+        WHERE bukrs = ps_bkpf-bukrs AND
+              belnr = ps_bkpf-belnr AND
+              gjahr = ps_bkpf-gjahr.
+
+        LOOP AT lt_bseg.
+          CALL FUNCTION 'Z_TRD_FI_GET_CLEARING_PART'
+            EXPORTING
+              bukrs   = ps_bkpf-bukrs
+              belnr   = ps_bkpf-belnr
+              gjahr   = ps_bkpf-gjahr
+              buzei   = lt_bseg-buzei
+            TABLES
+              bse_clr = it_bse_clr.
+          IF it_bse_clr[] IS NOT INITIAL.
+
+            LOOP AT it_bse_clr.
+              lt_link-z_belnr = it_bse_clr-belnr .
+              lt_link-z_gjahr = it_bse_clr-gjahr .
+              lt_link-bukrs = ps_bkpf-bukrs .
+              lt_link-belnr = ps_bkpf-belnr .
+              lt_link-gjahr = ps_bkpf-gjahr .
+              lt_link-z_type = 'FI' .
+              APPEND lt_link .
+              CLEAR lt_link .
+            ENDLOOP.
+            CLEAR it_bse_clr[].
+          ENDIF.
+        ENDLOOP.
+      ENDIF .
+      PERFORM get_urls TABLES lt_link USING 'FI'.
+  ENDCASE.
+ENDFORM.                    " FILL_LINK
+*&---------------------------------------------------------------------*
+*&      Form  GET_URLS
+*&---------------------------------------------------------------------*
+FORM get_urls TABLES pt_link STRUCTURE gt_link
+              USING  p_type .
+  DATA: lv_tabix TYPE sy-tabix .
+  DATA: BEGIN OF lt_ztf OCCURS 0
+      , urlid LIKE ztfin_url-urlid
+      , url LIKE ztfin_url-url
+      , END OF lt_ztf
+      .
+  DATA : lt_url TYPE STANDARD TABLE OF t_url WITH HEADER LINE .
+  CASE p_type .
+    WHEN 'MM'.
+      IF NOT  pt_link[] IS INITIAL.
+        SELECT urlid bukrs_fi mblnr_mm mjahr_mm FROM ztfin_url_rels
+         APPENDING TABLE lt_url
+         FOR ALL ENTRIES IN pt_link
+         WHERE
+*         bukrs_fi = pt_link-bukrs       AND
+         mblnr_mm = pt_link-z_belnr
+         AND   mjahr_mm = pt_link-z_gjahr
+         AND   deleted = space .
+      ENDIF.
+    WHEN 'FI'.
+      IF NOT  pt_link[] IS INITIAL.
+        SELECT urlid bukrs_fi belnr_fi gjahr_fi FROM ztfin_url_rels
+          APPENDING TABLE lt_url
+          FOR ALL ENTRIES IN pt_link
+          WHERE bukrs_fi = pt_link-bukrs
+          AND   belnr_fi = pt_link-z_belnr
+          AND   gjahr_fi = pt_link-z_gjahr
+          AND   deleted = space .
+      ENDIF.
+    WHEN OTHERS.
+  ENDCASE.
+  LOOP AT lt_url .
+    CLEAR pt_link .
+    READ TABLE pt_link WITH KEY "bukrs =   lt_url-bukrs
+                                z_belnr = lt_url-belnr
+                                z_gjahr = lt_url-gjahr .
+    CHECK sy-subrc EQ 0 .
+    lv_tabix = sy-tabix .
+    IF pt_link-urlid IS INITIAL .
+      pt_link-urlid = lt_url-urlid .
+      MODIFY pt_link INDEX lv_tabix TRANSPORTING urlid .
+    ELSE .
+      pt_link-urlid = lt_url-urlid .
+      APPEND pt_link .
+    ENDIF.
+  ENDLOOP.
+*  DELETE pt_link WHERE urlid IS INITIAL .
+  IF pt_link[] IS NOT INITIAL.
+    SELECT urlid url FROM ztfin_url
+    INTO TABLE lt_ztf
+    FOR ALL ENTRIES IN pt_link
+    WHERE urlid = pt_link-urlid .
+    SORT lt_ztf BY urlid .
+    LOOP AT pt_link .
+      CLEAR lt_ztf .
+      READ TABLE lt_ztf WITH KEY urlid = pt_link-urlid BINARY SEARCH .
+      CHECK sy-subrc EQ 0 .
+      pt_link-z_lotus_link = lt_ztf-url .
+      MODIFY pt_link TRANSPORTING z_lotus_link .
+    ENDLOOP.
+  ENDIF.
+  LOOP AT pt_link .
+    SHIFT pt_link-z_belnr RIGHT DELETING TRAILING space .
+    TRANSLATE pt_link-z_belnr USING ' 0' .
+    CASE pt_link-z_type .
+      WHEN 'FI'.
+        CONCATENATE 'B' pt_link-bukrs pt_link-z_belnr pt_link-z_gjahr INTO pt_link-z_lotus_key .
+      WHEN 'MM'.
+        CONCATENATE 'LMTDOC'  pt_link-z_belnr pt_link-z_gjahr INTO pt_link-z_lotus_key .
+    ENDCASE.
+    MODIFY pt_link TRANSPORTING z_lotus_key .
+  ENDLOOP.
+*  DELETE pt_link WHERE urlid IS INITIAL .
+  APPEND LINES OF pt_link TO gt_link .
+ENDFORM.                    " GET_URLS
+*&---------------------------------------------------------------------*
+*&      Form  FILL_LINK_TNK
+*&---------------------------------------------------------------------*
+FORM fill_link_tnk TABLES pt_cvd TYPE t_cvdt
+                   USING ps_dog_tnk TYPE t_dog_tnk .
+  DATA : lt_dog_found TYPE STANDARD TABLE OF t_dog_found WITH HEADER LINE .
+  DATA: BEGIN OF lt_zdoc OCCURS 0
+      , ndoc LIKE zdoc-ndoc
+      , dpodp LIKE zdoc-dpodp
+      , ndtnk LIKE zdoc-ndtnk
+      , cvd LIKE zdoc-cvd
+      , END OF lt_zdoc
+      .
+  DATA: BEGIN OF lt_zdoc2 OCCURS 0
+        , ndoc LIKE zdoc-ndoc
+        , cvd LIKE zdoc-cvd
+        , ndtnk LIKE zdoc-ndtnk
+        , dpodp LIKE zdoc-dpodp
+        , ndcmn LIKE zdoc-ndcmn
+        , END OF lt_zdoc2
+        .
+*главный договор
+*  CLEAR pt_cvd .
+*  READ TABLE pt_cvd WITH KEY gsber = PS_DOG_TNK-gsber
+*                             bukrs = PS_DOG_TNK-bukrs .
+  SELECT ndoc dpodp ndtnk cvd FROM zdoc
+  INTO TABLE lt_zdoc
+  WHERE bukrs = ps_dog_tnk-bukrs
+*  AND   cvd = pt_cvd-cvd
+  AND   ndtnk = ps_dog_tnk-ndtnk .
+  LOOP AT lt_zdoc.
+    lt_dog_found-bukrs = ps_dog_tnk-bukrs .
+    lt_dog_found-ndtnk = ps_dog_tnk-ndtnk .
+    lt_dog_found-naim_prod = ps_dog_tnk-naim_prod .
+    lt_dog_found-gsber = ps_dog_tnk-gsber .
+* lt_dog_found-Z_LOTUS_KEY
+    lt_dog_found-ndoc = lt_zdoc-ndoc .
+    lt_dog_found-cvd = lt_zdoc-cvd .
+    lt_dog_found-dpodp = lt_zdoc-dpodp .
+    lt_dog_found-inn = ps_dog_tnk-inn . "7770025154-00027704
+    APPEND lt_dog_found .
+    CLEAR lt_dog_found .
+
+  ENDLOOP.
+*все привязки к текущему договору
+  IF lt_zdoc[] IS NOT INITIAL.
+    SELECT ndoc cvd ndtnk dpodp ndcmn FROM zdoc
+    INTO TABLE lt_zdoc2
+    FOR ALL ENTRIES IN lt_zdoc
+    WHERE bukrs = ps_dog_tnk-bukrs
+    AND   cvd = lt_zdoc-cvd
+    AND   ndcmn = lt_zdoc-ndoc
+    AND   dpodp IN so_dpodp   .
+    LOOP AT lt_zdoc2.
+      CLEAR lt_zdoc .
+      READ TABLE lt_zdoc WITH KEY ndoc = lt_zdoc2-ndcmn .
+      lt_dog_found-bukrs = ps_dog_tnk-bukrs .
+      lt_dog_found-ndtnk = lt_zdoc-ndtnk .
+      lt_dog_found-naim_prod = ps_dog_tnk-naim_prod .
+      lt_dog_found-gsber = ps_dog_tnk-gsber .
+* lt_dog_found-Z_LOTUS_KEY
+      lt_dog_found-ndoc = lt_zdoc2-ndoc .
+      lt_dog_found-cvd = lt_zdoc2-cvd .
+      lt_dog_found-dpodp = lt_zdoc-dpodp .
+      lt_dog_found-inn = ps_dog_tnk-inn . "7770025154-00027704
+      APPEND lt_dog_found .
+      CLEAR lt_dog_found .
+    ENDLOOP.
+  ENDIF.
+  CHECK lt_dog_found[] IS NOT INITIAL .
+  PERFORM get_keys TABLES lt_dog_found  .
+
+  PERFORM corr_inn TABLES lt_dog_found. "7770025154-00027704
+
+*  APPEND LINES OF lt_dog_found TO gt_dog_found .
+  DATA : wa_dog_found LIKE LINE OF lt_dog_found .
+  DATA : lv_tabix TYPE sy-tabix .
+  SORT lt_dog_found BY bukrs naim_prod cvd ndoc .
+  DELETE ADJACENT DUPLICATES FROM lt_dog_found COMPARING bukrs naim_prod cvd ndoc .
+  SORT lt_dog_found BY bukrs naim_prod ndtnk dpodp .
+*  BREAK MVMaksimovsk .
+  LOOP AT lt_dog_found .
+    lv_tabix = sy-tabix .
+    ADD 1 TO lv_tabix .
+    CLEAR wa_dog_found .
+    READ TABLE lt_dog_found INTO wa_dog_found INDEX lv_tabix .
+    gt_dog_found-bukrs = lt_dog_found-bukrs.
+    gt_dog_found-ndtnk = lt_dog_found-ndtnk .
+    gt_dog_found-naim_prod = lt_dog_found-naim_prod .
+    gt_dog_found-gsber  = lt_dog_found-gsber .
+    gt_dog_found-ndoc  = lt_dog_found-ndoc .
+    gt_dog_found-cvd  = lt_dog_found-cvd .
+    gt_dog_found-dpodp  = lt_dog_found-dpodp .
+    gt_dog_found-inn = lt_dog_found-inn . "7770025154-00027704
+    gt_keys-ndoc = lt_dog_found-ndoc .
+    gt_keys-cvd = lt_dog_found-cvd .
+    APPEND gt_keys .
+    CLEAR gt_keys .
+    IF gt_dog_found-z_lotus_key IS INITIAL .
+      gt_dog_found-z_lotus_key = lt_dog_found-z_lotus_key .
+    ELSE.
+      CONCATENATE gt_dog_found-z_lotus_key lt_dog_found-z_lotus_key INTO gt_dog_found-z_lotus_key
+      SEPARATED BY ',' .
+    ENDIF.
+    IF ( lt_dog_found-bukrs <> wa_dog_found-bukrs
+        OR lt_dog_found-naim_prod <> wa_dog_found-naim_prod
+        OR lt_dog_found-ndtnk <> wa_dog_found-ndtnk
+        OR lt_dog_found-dpodp <> wa_dog_found-dpodp ).
+      gt_dog_found-keys[] = gt_keys[] .
+      APPEND gt_dog_found .
+      CLEAR gt_dog_found .
+      REFRESH gt_keys .
+    ELSE .
+*        gt_keys-ndoc = lt_dog_found-ndoc .
+*        gt_keys-cvd = lt_dog_found-cvd .
+*        APPEND gt_keys .
+*        CLEAR gt_keys .
+      IF gt_dog_found-z_lotus_key IS INITIAL .
+        gt_dog_found-z_lotus_key = lt_dog_found-z_lotus_key .
+      ELSE.
+        CONCATENATE gt_dog_found-z_lotus_key lt_dog_found-z_lotus_key INTO gt_dog_found-z_lotus_key
+        SEPARATED BY ',' .
+      ENDIF.
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    " FILL_LINK_TNK
+*&---------------------------------------------------------------------*
+*&      Form  GET_KEYS
+*&---------------------------------------------------------------------*
+FORM get_keys TABLES pt_dog_found STRUCTURE gt_dog_found .
+  LOOP AT pt_dog_found .
+    SHIFT pt_dog_found-ndoc RIGHT DELETING TRAILING space .
+    TRANSLATE pt_dog_found-ndoc USING ' 0' .
+    CONCATENATE 'G' pt_dog_found-bukrs pt_dog_found-cvd pt_dog_found-ndoc INTO pt_dog_found-z_lotus_key  .
+    MODIFY pt_dog_found TRANSPORTING z_lotus_key .
+  ENDLOOP.
+ENDFORM.                    " GET_KEYS
+*&---------------------------------------------------------------------*
+*&      Form  CONVERT_SYMBOLS
+*&---------------------------------------------------------------------*
+FORM convert_symbols  CHANGING ps_string.
+*(7770014713-00020329 AMKRYLOVA mod-
+*  check PS_STRING ca '\/:*?<>"|.' .
+*  translate PS_STRING using '\_' .
+*  translate PS_STRING using '/_' .
+*  translate PS_STRING using ':_' .
+*  translate PS_STRING using '*_' .
+*  translate PS_STRING using '?_' .
+*  translate PS_STRING using '<_' .
+*  translate PS_STRING using '>_' .
+*  translate PS_STRING using '"_' .
+*  translate PS_STRING using '|_' .
+*  replace all occurrences of '.' in  PS_STRING with '' . "Ругается на последний символ точки (.) заменяю его на ничего
+*)7770014713-00020329 AMKRYLOVA mod-
+*(7770014713-00020329 AMKRYLOVA mod+
+  CHECK ps_string CA '\/:*?<>"|.' .
+  REPLACE ALL OCCURRENCES OF '\' IN  ps_string WITH '' .
+  TRANSLATE ps_string USING '/_' .
+  REPLACE ALL OCCURRENCES OF ':' IN  ps_string WITH '' .
+  REPLACE ALL OCCURRENCES OF '*' IN  ps_string WITH '' .
+  REPLACE ALL OCCURRENCES OF '?' IN  ps_string WITH '' .
+  REPLACE ALL OCCURRENCES OF '<' IN  ps_string WITH '' .
+  REPLACE ALL OCCURRENCES OF '>' IN  ps_string WITH '' .
+  REPLACE ALL OCCURRENCES OF '"' IN  ps_string WITH '' .
+  REPLACE ALL OCCURRENCES OF '|' IN  ps_string WITH '' .
+  REPLACE ALL OCCURRENCES OF '.' IN  ps_string WITH '' . "Ругается на последний символ точки (.) заменяю его на ничего
+*)7770014713-00020329 AMKRYLOVA mod+
+ENDFORM.                    " CONVERT_SYMBOLS
+*&---------------------------------------------------------------------*
+*&      Form  BROWSE_FOLDER
+*&---------------------------------------------------------------------*
+FORM browse_folder CHANGING pv_fout .
+  CALL FUNCTION 'TMP_GUI_BROWSE_FOR_FOLDER'
+    IMPORTING
+      selected_folder = pv_fout.
+ENDFORM.                    " BROWSE_FOLDER
+*&---------------------------------------------------------------------*
+*&      Form  CHECK_PATH
+*&---------------------------------------------------------------------*
+FORM check_path USING p_fout
+                CHANGING p_subrc  .
+  DATA : lv_result TYPE abap_bool.
+  DATA : lv_fout TYPE string .
+  lv_fout = p_fout .
+  CALL METHOD cl_gui_frontend_services=>directory_exist
+    EXPORTING
+      directory            = lv_fout
+    RECEIVING
+      result               = lv_result
+    EXCEPTIONS
+      cntl_error           = 1
+      error_no_gui         = 2
+      wrong_parameter      = 3
+      not_supported_by_gui = 4.
+  gv_subrc = sy-subrc .
+
+  CHECK lv_result NE 'X'.
+  gv_subrc = 8 .
+ENDFORM.                    " CHECK_PATH
+*&---------------------------------------------------------------------*
+*&      Form  CREATE_FOLDERS
+*&---------------------------------------------------------------------*
+FORM create_folders .
+  DATA: lv_name TYPE string .
+  DATA:  l_upload_dir_level TYPE string .
+*  check CH_REL is initial .
+  CHECK ch_dog IS NOT INITIAL .
+  LOOP AT gt_dog_found .
+    IF sy-tcode NE 'ZVRD_REESTR_DOG'."7770014713-00020329 mod+ AMKRYLOVA
+**//7770025154-00027704
+*      lv_name = 'Книга покупок' .
+*      PERFORM create_directory_tree
+*              USING
+*                pa_fout2
+*                lv_name
+*              CHANGING
+*                l_upload_dir_level .
+      l_upload_dir_level = pa_fout2.
+**\\7770025154-00027704
+*(7770014713-00020329 amkrylova mod+
+    ELSE.
+*Без папки Книга покупок
+      l_upload_dir_level = pa_fout2.
+    ENDIF.
+*)7770014713-00020329 amkrylova mod+
+    lv_name = 'Договоры' .
+    PERFORM create_directory_tree
+        USING
+          l_upload_dir_level
+          lv_name
+        CHANGING
+          l_upload_dir_level .
+
+**//7770025154-00027704
+*    lv_name = gt_dog_found-naim_prod .
+
+    CONDENSE gt_dog_found-inn NO-GAPS.
+
+    IF gt_dog_found-inn IS INITIAL OR gt_dog_found-inn CN '0123456789 '.
+      lv_name = gt_dog_found-naim_prod.
+    ELSE.
+      lv_name = gt_dog_found-inn .
+    ENDIF.
+**\\7770025154-00027704
+
+
+    PERFORM convert_symbols CHANGING lv_name .
+    PERFORM create_directory_tree
+        USING
+          l_upload_dir_level
+          lv_name
+        CHANGING
+          l_upload_dir_level .
+
+*    CONCATENATE gt_dog_found-ndtnk INTO  lv_name SEPARATED BY space .
+    lv_name = gt_dog_found-ndtnk .
+    PERFORM convert_symbols CHANGING lv_name .
+    PERFORM create_directory_tree
+        USING
+          l_upload_dir_level
+          lv_name
+        CHANGING
+          l_upload_dir_level .
+    gt_dog_found-hyperpath = l_upload_dir_level .
+    MODIFY gt_dog_found TRANSPORTING hyperpath .
+  ENDLOOP.
+  PERFORM progress_indicator USING '45' 'Создание папок' .
+ENDFORM.                    " CREATE_FOLDERS
+
+*&---------------------------------------------------------------------*
+*&      Form  create_directory_tree
+*&---------------------------------------------------------------------*
+FORM create_directory_tree USING p_root
+                                  p_name
+                         CHANGING p_dir_level1 .
+
+  DATA l_directory TYPE string.
+  DATA: l_res TYPE i,
+        l_result TYPE c.
+
+* формируем путь к директории
+  MOVE p_name TO l_directory.
+  TRANSLATE l_directory USING '/_'.
+  CONCATENATE p_root '\' l_directory INTO l_directory.
+
+* создаём директорию первого уровня
+  CALL METHOD cl_gui_frontend_services=>directory_exist
+    EXPORTING
+      directory            = l_directory
+    RECEIVING
+      result               = l_result
+    EXCEPTIONS
+      cntl_error           = 1
+      error_no_gui         = 2
+      wrong_parameter      = 3
+      not_supported_by_gui = 4
+      OTHERS               = 5.
+  IF l_result IS INITIAL AND sy-subrc IS INITIAL.
+    CALL METHOD cl_gui_frontend_services=>directory_create
+      EXPORTING
+        directory                = l_directory
+      CHANGING
+        rc                       = l_res
+      EXCEPTIONS
+        directory_create_failed  = 1
+        cntl_error               = 2
+        error_no_gui             = 3
+        directory_access_denied  = 4
+        directory_already_exists = 5
+        path_not_found           = 6
+        unknown_error            = 7
+        not_supported_by_gui     = 8
+        wrong_parameter          = 9
+        OTHERS                   = 10.
+    IF sy-subrc <> 0.
+*      BREAK AGZYKOV .
+*     MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*                WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+    ENDIF.
+
+*    if sy-subrc <> 0.
+*      message e000(01) with 'Ошибка записи на диск!'(012).
+*    endif.
+  ENDIF.
+  MOVE l_directory TO p_dir_level1.
+ENDFORM.                    " create_directory_tree
+*&---------------------------------------------------------------------*
+*&      Form  CHECK_OUT_FILES
+*&---------------------------------------------------------------------*
+FORM check_out_files .
+  DATA: lv_len TYPE i .
+  DATA: lv_count TYPE i .
+  DATA: lfl_found .
+  IF pa_fout1 IS INITIAL.
+    pa_fout1 = pa_file .
+    lv_len = STRLEN( pa_fout1 ) .
+    DO .
+      SUBTRACT 1 FROM lv_len .
+      IF pa_fout1+lv_len(1) = '\'.
+        lfl_found = 'X' .
+        EXIT .
+      ENDIF.
+      IF lv_len = 0.
+        EXIT .
+      ENDIF.
+    ENDDO.
+    IF lfl_found IS NOT INITIAL.
+      pa_fout1 = pa_file(lv_len) .
+    ENDIF.
+  ENDIF.
+  CLEAR: lv_len ,lv_count, lfl_found .
+  CHECK ch_dog IS NOT INITIAL .
+  IF pa_fout2 IS INITIAL.
+    pa_fout2 = pa_file .
+    lv_len = STRLEN( pa_fout2 ) .
+    DO .
+      SUBTRACT 1 FROM lv_len .
+      IF pa_fout2+lv_len(1) = '\'.
+        lfl_found = 'X' .
+        EXIT .
+      ENDIF.
+      IF lv_len = 0.
+        EXIT .
+      ENDIF.
+    ENDDO.
+    IF lfl_found IS NOT INITIAL.
+      pa_fout2 = pa_file(lv_len) .
+    ENDIF.
+  ENDIF.
+ENDFORM.                    " CHECK_OUT_FILES
+*&---------------------------------------------------------------------*
+*&      Form  EXPORT_TO_EXCEL
+*&---------------------------------------------------------------------*
+FORM export_to_excel USING p_folder p_file p_name.
+  DATA: lo_docking_container TYPE REF TO cl_gui_docking_container
+      , lo_control TYPE REF TO i_oi_container_control
+      , lo_document_proxy TYPE REF TO i_oi_document_proxy
+      , lo_excel_iface TYPE REF TO i_oi_spreadsheet
+      , lo_error TYPE REF TO i_oi_error
+      , lc_exceltype TYPE soi_document_type VALUE soi_doctype_excel_sheet
+      , lv_retcode TYPE soi_ret_string
+      , lv_text1(50)
+      , lv_answer
+      .
+  DATA lv_text(255) .
+  DATA lv_text0(255) .
+  DATA lt_data TYPE TABLE OF zacn_pbook_inv WITH HEADER LINE  .
+  DATA lt_fields_table TYPE soi_fields_table .
+  DATA lv_lines TYPE sy-tabix .
+  IF p_file = 'rinvoice.xls'.
+    CHECK gt_rinvoice[] IS NOT INITIAL.
+    PERFORM fill_empty_path .
+  ELSEIF p_file = 'rdogs.xls'. .
+    CHECK gt_dog_found[] IS NOT INITIAL.
+    CHECK ch_dog IS NOT INITIAL .
+*    check CH_REL is initial .
+  ENDIF.
+*(7770014713-00020329 AMKRYLOVA mod+
+  IF p_file = 'reestr_contrs_new.xls'.
+    PERFORM open_excel_doc_from_bds USING 'ZOST_REPORTS'
+                                       'OT'
+                                       p_folder
+                                       space
+                                       p_file
+                                       lo_docking_container
+                                       lo_control
+                                       lo_document_proxy
+                                       lo_excel_iface
+                                       lo_error
+                                       lc_exceltype
+                                       lv_retcode
+                                       .
+  ELSE.
+*)7770014713-00020329 AMKRYLOVA mod+
+    PERFORM open_excel_doc_from_bds USING 'SOFFICEINTEGRATION'
+                                       'OT'
+                                       p_folder
+                                       space
+                                       p_file
+                                       lo_docking_container
+                                       lo_control
+                                       lo_document_proxy
+                                       lo_excel_iface
+                                       lo_error
+                                       lc_exceltype
+                                       lv_retcode
+                                       .
+
+  ENDIF."7770014713-00020329 AMKRYLOVA mod+
+  CHECK lo_excel_iface IS NOT INITIAL.
+  CLEAR gt_uploaded .
+  READ TABLE gt_uploaded INDEX 1 .
+
+  IF gt_uploaded-bukrs = '4000'.
+    gv_gsbers = '1012,1102,1124,4000-4012' .
+    PERFORM insert_cell_xls USING '2' '1' 'ОАО "ТНК-ВР Холдинг"' 'headline' 3 2
+                                   lo_docking_container
+                                   lo_control
+                                   lo_document_proxy
+                                   lo_excel_iface
+                                   lo_error
+                                   lc_exceltype
+                                   lv_retcode .
+
+  ELSEIF gt_uploaded-bukrs = '1100'.
+    gv_gsbers = '1100,1140,1130,1030,1060,1132' .
+    PERFORM insert_cell_xls USING '2' '1' 'ОАО "ТНК-ВР Менеджмент"' 'headline' 3 2
+                                   lo_docking_container
+                                   lo_control
+                                   lo_document_proxy
+                                   lo_excel_iface
+                                   lo_error
+                                   lc_exceltype
+                                   lv_retcode .
+  ENDIF.
+  IF p_file <> 'reestr_contrs_new.xls'.
+    PERFORM insert_cell_xls USING '2' '1' gv_gsbers 'header' 7 3  """????
+                                   lo_docking_container
+                                   lo_control
+                                   lo_document_proxy
+                                   lo_excel_iface
+                                   lo_error
+                                   lc_exceltype
+                                   lv_retcode .
+  ELSE.
+*(7770014713-00020329 AMKRYLOVA mod+
+    IF ch_rel = space AND NOT so_per[] IS INITIAL.
+      lv_text0 =  'Документы в подтвеждение налоговых вычетов, заявленных в разделах 4 и 5 декларации "Налоговая декларация по налогу на добавленную стоимость" за'.
+      IF NOT so_per[] IS INITIAL.
+        CALL FUNCTION 'Z_OST_MONTH'
+          EXPORTING
+            monthchar = so_per-low+4(2)
+          IMPORTING
+            month     = lv_text1.
+        TRANSLATE lv_text1 TO UPPER CASE.
+        lv_text = lv_text1.
+        IF NOT so_per-high IS INITIAL.
+          CALL FUNCTION 'Z_OST_MONTH'
+            EXPORTING
+              monthchar = so_per-high+4(2)
+            IMPORTING
+              month     = lv_text1.
+          TRANSLATE lv_text1 TO UPPER CASE.
+          CONCATENATE lv_text so_per-low+0(4) INTO lv_text SEPARATED BY space.
+          CONCATENATE lv_text 'г -' INTO lv_text.
+          CONCATENATE lv_text lv_text1  so_per-high+0(4) INTO lv_text SEPARATED BY space.
+          CONCATENATE lv_text 'г.' INTO lv_text.
+        ELSE.
+          CONCATENATE lv_text so_per-low+0(4) INTO lv_text SEPARATED BY space.
+          CONCATENATE lv_text 'г.' INTO lv_text.
+        ENDIF.
+      ENDIF.
+      CONCATENATE lv_text0 lv_text INTO lv_text0 SEPARATED BY space.
+      PERFORM insert_cell_xls USING '2' '1' lv_text0 'headline' 4 2
+                                   lo_docking_container
+                                   lo_control
+                                   lo_document_proxy
+                                   lo_excel_iface
+                                   lo_error
+                                   lc_exceltype
+                                   lv_retcode .
+
+      CONCATENATE 'РЕЕСТР договоров за' lv_text INTO lv_text0 SEPARATED BY space.
+      PERFORM insert_cell_xls USING '2' '1' lv_text0 'headline' 7 2
+                                    lo_docking_container
+                                    lo_control
+                                    lo_document_proxy
+                                    lo_excel_iface
+                                    lo_error
+                                    lc_exceltype
+                                    lv_retcode .
+      CLEAR lv_text.
+    ENDIF.
+*)7770014713-00020329 AMKRYLOVA mod+
+  ENDIF.
+*  BREAK MVMaksimovsk .
+
+  IF p_file = 'rinvoice.xls'.
+    PERFORM progress_indicator USING '75' 'Реестр фактур' .
+    LOOP AT gt_rinvoice.
+      gt_rinvoice-data_num_sch = gt_rinvoice-data_num_sch2.
+      gt_rinvoice-naim_prod = gt_rinvoice-naim_prod2.
+      MOVE-CORRESPONDING gt_rinvoice TO lt_data .
+      lt_data-path = gt_rinvoice-path+0(255) .
+      lt_data-path2 = gt_rinvoice-path+255(255) .
+      lt_data-path3 = gt_rinvoice-path+510(255) .
+      lt_data-path4 = gt_rinvoice-path+765(255) .
+      lt_data-path5 = gt_rinvoice-path+1020(255) .
+      lt_data-path6 = gt_rinvoice-path+1275(255) .
+      lt_data-path7 = gt_rinvoice-path+1530(255) .
+      lt_data-path8 = gt_rinvoice-path+1785(255) .
+      lt_data-path9 = gt_rinvoice-path+2040(255) .
+      lt_data-path10 = gt_rinvoice-path+2295(255) .
+      lt_data-path11 = gt_rinvoice-path+2550(255) .
+      lt_data-path12 = gt_rinvoice-path+2805(255) .
+      lt_data-path13 = gt_rinvoice-path+3060(255) .
+      lt_data-path14 = gt_rinvoice-path+3315(255) .
+      lt_data-path15 = gt_rinvoice-path+3570(255) .
+      lt_data-path16 = gt_rinvoice-path+3825(255) .
+      lt_data-path17 = gt_rinvoice-path+4080(255) .
+      lt_data-path18 = gt_rinvoice-path+4335(255) .
+      lt_data-path19 = gt_rinvoice-path+4590(255) .
+      lt_data-path20 = gt_rinvoice-path+4845(255) .
+      lt_data-path21 = gt_rinvoice-path+5100(255) .
+      lt_data-path22 = gt_rinvoice-path+5355(255) .
+      lt_data-path23 = gt_rinvoice-path+5610(255) .
+      lt_data-path24 = gt_rinvoice-path+5865(255) .
+      lt_data-path25 = gt_rinvoice-path+6120(255) .
+      lt_data-path26 = gt_rinvoice-path+6375(255) .
+      lt_data-path27 = gt_rinvoice-path+6630(255) .
+      lt_data-path28 = gt_rinvoice-path+6885(255) .
+      lt_data-path29 = gt_rinvoice-path+7140(255) .
+      lt_data-path30 = gt_rinvoice-path+7395(255) .
+      APPEND lt_data .
+      CLEAR lt_data .
+    ENDLOOP.
+*  elseif P_FILE = 'rdogs.xls'."7770014713-00020329 AMKRYLOVA mod-
+  ELSEIF p_file = 'rdogs.xls' OR p_file = 'reestr_contrs_new.xls'."7770014713-00020329 AMKRYLOVA mod+
+*    BREAK MVMaksimovsk .
+    IF p_file = 'reestr_contrs_new.xls'.
+      SORT gt_dog_found BY naim_prod.
+    ENDIF.
+    PERFORM progress_indicator USING '90' 'Реестр договоров' .
+    LOOP AT gt_dog_found.
+      lt_data-counter = sy-tabix .
+*(7770014713-00020329 AMKRYLOVA mod+
+      IF p_file = 'reestr_contrs_new.xls'.
+        lt_data-naim_prod = gt_dog_found-ndtnk.
+        lt_data-data_num_sch = gt_dog_found-naim_prod.
+        lt_data-path1 = gt_dog_found-hyperpath .
+*        concatenate '.'  GT_DOG_FOUND-PATH into LT_DATA-PATH1 .
+        lt_data-path = space.
+      ELSE.
+*)7770014713-00020329 AMKRYLOVA mod+
+        CONCATENATE gt_dog_found-ndtnk 'от' gt_dog_found-dpodp_str INTO lt_data-data_num_sch SEPARATED BY space.
+        lt_data-naim_prod = gt_dog_found-naim_prod .
+        lt_data-path = gt_dog_found-hyperpath .
+      ENDIF."7770014713-00020329 AMKRYLOVA mod+
+
+
+      CONCATENATE '.'  gt_dog_found-path INTO lt_data-hyperpath  .
+      IF p_file = 'reestr_contrs_new.xls'.
+        CLEAR lt_data-path1.
+      ENDIF.
+      APPEND lt_data .
+      CLEAR lt_data .
+    ENDLOOP.
+  ENDIF .
+  CALL FUNCTION 'DP_GET_FIELDS_FROM_TABLE'
+    EXPORTING
+      tabname          = 'ZACN_PBOOK_INV'
+    TABLES
+      data             = lt_data[]
+      fields           = lt_fields_table
+    EXCEPTIONS
+      dp_invalid_table = 1.
+  lv_lines   = LINES( lt_data[] ).
+*(7770014713-00020329 AMKRYLOVA mod+
+  IF p_file = 'reestr_contrs_new.xls'.
+    lo_excel_iface->insert_range_dim(
+        EXPORTING
+          name     = 'TT'
+          top      = 12
+          left     = 1
+          rows     = lv_lines
+          columns  = 36
+          no_flush = 'X'
+        IMPORTING
+          error    = lo_error
+          retcode  = lv_retcode ).
+  ELSE.
+*)7770014713-00020329 AMKRYLOVA mod+
+    lo_excel_iface->insert_range_dim(
+        EXPORTING
+          name     = 'TT'
+          top      = 10
+          left     = 1
+          rows     = lv_lines
+          columns  = 36
+          no_flush = 'X'
+        IMPORTING
+          error    = lo_error
+          retcode  = lv_retcode ).
+  ENDIF."7770014713-00020329 AMKRYLOVA mod+
+*    DATA lv_border TYPE i.
+*    FIELD-SYMBOLS <fs> TYPE x.
+*    ASSIGN lv_border TO <fs> CASTING.
+*    SET BIT 1 OF <fs> TO 0. "Толщина (Жирная линия)
+*    SET BIT 2 OF <fs> TO 1. "Толщина
+*    SET BIT 3 OF <fs> TO 1. "горизонтальная линия
+*    SET BIT 4 OF <fs> TO 1. "вертикальная линия
+*    SET BIT 5 OF <fs> TO 1. "правая
+*    SET BIT 6 OF <fs> TO 1. "нижняя
+*    SET BIT 7 OF <fs> TO 1. "верхняя
+*    SET BIT 8 OF <fs> TO 1. "левая границы
+*    lv_border = <fs>(1).
+*    CALL METHOD lo_excel_iface->set_frame
+*      EXPORTING
+*        rangename = 'TT'
+*        typ       = lv_border
+*        color     = 1.
+*(7770014713-00020329 AMKRYLOVA mod+
+  IF p_file = 'reestr_contrs_new.xls'.
+    CALL METHOD lo_excel_iface->set_font
+      EXPORTING
+        rangename = 'TT'
+        family    = 'Arial'
+        size      = '10'
+        bold      = '0'
+        italic    = '0'
+        align     = '0'
+        no_flush  = 'X'
+      IMPORTING
+        error     = lo_error
+        retcode   = lv_retcode.
+
+    lo_excel_iface->insert_range_dim(
+        EXPORTING
+          name     = 'TT1'
+          top      = 12
+          left     = 1
+          rows     = lv_lines
+          columns  = 4
+          no_flush = 'X'
+        IMPORTING
+          error    = lo_error
+          retcode  = lv_retcode ).
+
+    CALL METHOD lo_excel_iface->set_frame
+      EXPORTING
+        rangename = 'TT1'
+        typ       = 127
+        color     = 1
+        no_flush  = 'X'
+      IMPORTING
+        error     = lo_error
+        retcode   = lv_retcode.
+
+  ELSE.
+*)7770014713-00020329 AMKRYLOVA mod+
+    CALL METHOD lo_excel_iface->set_font
+      EXPORTING
+        rangename = 'TT'
+        family    = 'Arial'
+        size      = '16'
+        bold      = '0'
+        italic    = '0'
+        align     = '0'
+        no_flush  = 'X'
+      IMPORTING
+        error     = lo_error
+        retcode   = lv_retcode.
+  ENDIF."7770014713-00020329 AMKRYLOVA mod+
+
+  CALL METHOD lo_excel_iface->insert_one_table
+    EXPORTING
+      ddic_name    = 'ZACN_PBOOK_INV'
+      data_table   = lt_data[]
+      fields_table = lt_fields_table[]
+      rangename    = 'TT'
+      no_flush     = 'X'
+      wholetable   = 'X'
+    IMPORTING
+      error        = lo_error
+      retcode      = lv_retcode.
+
+  CALL METHOD lo_document_proxy->execute_macro
+    EXPORTING
+      macro_string = 'Module1.put_borders'
+    IMPORTING
+      error        = lo_error
+      retcode      = lv_retcode.
+*  BREAK MVMaksimovsk  .
+  DATA: lv_path TYPE string .
+*{ 28001
+* завязка на имя файла по всей программе - это зашибись
+* всегда так делай, %username%
+
+*  CASE p_file.
+*    WHEN 'rinvoice.xls'.
+*      CONCATENATE pa_fout1 '\' p_name INTO lv_path .
+*    WHEN 'rdogs.xls'.
+*      CONCATENATE pa_fout2 '\' p_name INTO lv_path .
+*    WHEN 'reestr_contrs_new.xls'.
+*      CONCATENATE pa_fout2 '\' p_name INTO lv_path .
+*  ENDCASE.
+  CASE p_file.
+    WHEN 'rinvoice.xls'.
+      PERFORM rename_file
+                  USING
+                     gs_header
+                     pa_fout1
+                     'РеесКнПкВР'(inv)
+                  CHANGING
+                     lv_path.
+    WHEN 'rdogs.xls'.
+      PERFORM rename_file
+                  USING
+                     gs_header
+                     pa_fout2
+                     'РеесДогКнПкВР'(dog)
+                  CHANGING
+                     lv_path.
+    WHEN 'reestr_contrs_new.xls'.
+      PERFORM rename_file
+                  USING
+                     gs_header
+                     pa_fout2
+                     'РеесДогКнПкВР'(dog)
+                  CHANGING
+                     lv_path.
+  ENDCASE.
+*} 28001
+  CALL METHOD OF ole2_activesheet 'SaveAs'
+    EXPORTING
+    #1 = lv_path.
+*    CLEAR lv_border .
+*    ASSIGN lv_border TO <fs> CASTING.
+*    SET BIT 1 OF <fs> TO 1. "Толщина (Жирная линия)
+*    SET BIT 2 OF <fs> TO 1. "Толщина
+*    SET BIT 3 OF <fs> TO 1. "горизонтальная линия
+*    SET BIT 4 OF <fs> TO 1. "вертикальная линия
+*    SET BIT 5 OF <fs> TO 1. "правая
+*    SET BIT 6 OF <fs> TO 1. "нижняя
+*    SET BIT 7 OF <fs> TO 1. "верхняя
+*    SET BIT 8 OF <fs> TO 1. "левая границы
+*    lv_border = <fs>(1).
+*    CALL METHOD lo_excel_iface->set_frame
+*      EXPORTING
+*        rangename = 'TO'
+*        typ       = lv_border
+*        color     = 1.
+
+*    CALL METHOD lo_excel_iface->set_font
+*      EXPORTING
+*        rangename = 'TO'
+*        family    = 'Arial'
+*        size      = '16'
+*        bold      = '0'
+*        italic    = '0'
+*        align     = '0'
+*        no_flush  = 'X'
+*      IMPORTING
+*        error     = lo_error
+*        retcode   = lv_retcode.
+
+*      ADD 10 TO lv_lines .
+*     PERFORM insert_cell_xls USING '2' '2' 'Итого' 'TO' lv_lines 1.  """????
+* CALL METHOD OF ole2_activeworkbook 'Close'
+*    EXPORTING
+*    #1 = 1 .
+  lo_document_proxy->close_document( ).
+  cl_gui_cfw=>flush( ).
+  PERFORM free_excel_obj USING lo_docking_container
+                               lo_control
+                               lo_document_proxy
+                               lo_excel_iface
+                               lo_error
+                               lc_exceltype
+                               lv_retcode.
+*  BREAK MVMaksimovsk  .
+
+ENDFORM.                    " EXPORT_TO_EXCEL
+
+*&---------------------------------------------------------------------*
+*&      Form  UPDATE_EXCEL
+*&---------------------------------------------------------------------*
+FORM update_excel .
+  DATA: lo_docking_container_upd TYPE REF TO cl_gui_docking_container
+      , lo_control TYPE REF TO i_oi_container_control
+      , lo_document_proxy TYPE REF TO i_oi_document_proxy
+      .
+  DATA: lv_inplace TYPE flag .
+  DATA: lv_docurl TYPE bapiuri-uri VALUE 'file://' . "Для URL адреса
+*{ 28003
+  DATA:
+    l_nar_file TYPE char2048.
+*} 28003
+
+
+*{ 28003
+  PERFORM nar_new_filename
+              USING
+                 gs_header
+                 pa_file
+              CHANGING
+                 l_nar_file.
+*} 28003
+
+*  check CH_REL is initial .
+  PERFORM progress_indicator USING '95' 'Обновление входного файла' .
+  CONCATENATE lv_docurl pa_file INTO lv_docurl .
+  PERFORM start_excel USING lo_docking_container_upd
+                            lv_inplace
+                            lv_docurl
+                            l_nar_file                      " 28003
+                      CHANGING
+                            lo_control
+                            lo_document_proxy  .
+
+ENDFORM.                    " UPDATE_EXCEL
+*&---------------------------------------------------------------------*
+*&      Form  TIFF_DOG_UPLOAD
+*&---------------------------------------------------------------------*
+FORM tiff_dog_upload .
+  DATA : lv_path TYPE string .
+  DATA: l_filename           TYPE string,
+        l_old_filename       TYPE string,
+        l_new_filename       TYPE string,
+        l_path               TYPE string,
+        l_hyperlink_filename TYPE string,
+        lv_file_name TYPE zgruhd_doc_name,
+        l_rc TYPE i.
+  DATA : lv_doc_name  TYPE zgruhd_doc_name
+       , lv_ext       TYPE char4
+       .
+  DATA : lv_row TYPE i.
+  DATA : lv_lines TYPE i .
+  DATA : lv_text(128).
+  DATA : lv_perc TYPE i .
+  DATA : lv_linest(12) .
+  CHECK ch_dog IS NOT INITIAL .
+  CHECK ch_rel IS INITIAL .
+  lv_linest = lv_lines = LINES( gt_dog_found[] ) .
+  SHIFT lv_linest LEFT DELETING LEADING space .
+  LOOP AT gt_dog_found_v2 .
+    lv_perc = sy-tabix * 100 / lv_lines .
+    lv_text = sy-tabix .
+    SHIFT lv_text LEFT DELETING LEADING space .
+    CONCATENATE 'Договор' lv_text 'из' lv_linest INTO lv_text SEPARATED BY space .
+    gt_keys[] = gt_dog_found_v2-keys[] .
+    lv_path = gt_dog_found_v2-path .
+    CONCATENATE pa_fout2 lv_path INTO lv_path . " Путь выгрузки TIFF договоров
+    LOOP AT gt_keys .
+      PERFORM get_zdoc_name
+         USING
+           gt_dog_found_v2-bukrs
+           gt_keys-cvd
+           gt_keys-ndoc
+         CHANGING
+           lv_doc_name
+           lv_ext.
+      CONCATENATE gt_keys-cvd '_' gt_keys-ndoc '.' lv_ext INTO l_filename .
+      CALL FUNCTION 'Z_FILE_ORIGINAL_DWN'
+        EXPORTING
+          bukrs          = gt_dog_found_v2-bukrs
+          cvd            = gt_keys-cvd
+          ndoc           = gt_keys-ndoc
+          pcdir          = lv_path
+          delfl          = ''
+          iv_execute     = ''
+        EXCEPTIONS
+          file_not_found = 1
+          error_when_s   = 2
+          doc_not_found  = 3
+          OTHERS         = 4.
+      CHECK sy-subrc EQ 0 .
+*      изменяем имя выгруженного файла
+      lv_file_name = lv_doc_name.
+      SHIFT lv_file_name RIGHT DELETING TRAILING space.
+      TRANSLATE lv_file_name USING '._/_\_:_*_<_>_|_?_"_ _'.
+      SHIFT lv_file_name LEFT DELETING LEADING '_'.
+
+      CONCATENATE lv_path l_filename INTO l_old_filename.
+      CONCATENATE lv_path lv_file_name '.' lv_ext INTO l_new_filename.
+      CALL METHOD cl_gui_frontend_services=>file_copy
+        EXPORTING
+          SOURCE               = l_old_filename
+          DESTINATION          = l_new_filename
+          overwrite            = 'X'
+        EXCEPTIONS
+          cntl_error           = 1
+          error_no_gui         = 2
+          wrong_parameter      = 3
+          disk_full            = 4
+          access_denied        = 5
+          file_not_found       = 6
+          destination_exists   = 7
+          unknown_error        = 8
+          path_not_found       = 9
+          disk_write_protect   = 10
+          drive_not_ready      = 11
+          not_supported_by_gui = 12
+          OTHERS               = 13.
+      IF sy-subrc <> 0.
+*       MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*                  WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+
+      CALL METHOD cl_gui_frontend_services=>file_delete
+        EXPORTING
+          filename             = l_old_filename
+        CHANGING
+          rc                   = l_rc
+        EXCEPTIONS
+          file_delete_failed   = 1
+          cntl_error           = 2
+          error_no_gui         = 3
+          file_not_found       = 4
+          access_denied        = 5
+          unknown_error        = 6
+          not_supported_by_gui = 7
+          wrong_parameter      = 8
+          OTHERS               = 9.
+      IF sy-subrc <> 0.
+*      MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*                 WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+      ENDIF.
+*      пересчитываем количество страниц в TIFF файле
+*      PERFORM fill_tiff_pages
+*             USING
+*               l_new_filename
+*               lv_row.
+
+
+    ENDLOOP.
+    PERFORM progress_indicator USING lv_perc lv_text .
+  ENDLOOP.
+ENDFORM.                    " TIFF_DOG_UPLOAD
+
+*form fill_tiff_pages using p_path
+*                           p_row.
+*
+**  read table gt_format with key table_field = c_list assigning <fs_format>.
+*
+*  call method of xls_application 'Run'
+*    exporting
+*      #1 = 'calculate_tiff_pages'
+*      #2 = p_path
+*      #3 = p_row
+*      #4 = <fs_format>-xfield_col.
+*
+*endform.                    " fill_tiff_pages
+
+FORM open_excel_doc_from_bds USING uv_classname TYPE sbdst_classname
+                                   uv_classtype TYPE sbdst_classtype
+                                   uv_objectkey TYPE sbdst_object_key
+                                   uv_inplace TYPE c
+                                   p_file
+                                   lo_docking_container TYPE REF TO cl_gui_docking_container
+                                   lo_control TYPE REF TO i_oi_container_control
+                                   lo_document_proxy TYPE REF TO i_oi_document_proxy
+                                   lo_excel_iface TYPE REF TO i_oi_spreadsheet
+                                   lo_error TYPE REF TO i_oi_error
+                                   lc_exceltype TYPE soi_document_type
+                                   lv_retcode TYPE soi_ret_string
+                                    .
+  DATA lt_doc_uris TYPE sbdst_uri.
+  DATA ls_doc_uri LIKE LINE OF lt_doc_uris.
+  DATA lt_doc_signature TYPE sbdst_signature.
+  DATA lv_doc_url TYPE bapiuri-uri.
+  DATA lt_components TYPE  sbdst_components WITH HEADER LINE.
+  IF lo_document_proxy IS INITIAL.
+    PERFORM init_excel_proxy USING uv_inplace
+                                   lo_docking_container
+                                   lo_control
+                                   lo_document_proxy
+                                   lo_excel_iface
+                                   lo_error
+                                   lc_exceltype
+                                   lv_retcode .
+  ENDIF.
+  CHECK NOT lo_document_proxy IS INITIAL.
+
+  cl_bds_document_set=>get_with_url(
+    EXPORTING
+      classname       = uv_classname
+      classtype       = uv_classtype
+      object_key      = uv_objectkey
+    CHANGING
+      uris            = lt_doc_uris[]
+      signature       = lt_doc_signature[]
+      components      = lt_components[]
+    EXCEPTIONS
+      nothing_found   = 1
+      error_kpro      = 2
+      internal_error  = 3
+      parameter_error = 4
+      not_authorized  = 5
+      not_allowed     = 6 ).
+
+  IF sy-subrc NE 0 .
+    MESSAGE 'cl_bds_document_set=>get_with_url error' TYPE 'I'.
+    EXIT.
+  ENDIF.
+  LOOP AT lt_components WHERE comp_id = p_file.
+    LOOP AT lt_doc_uris INTO ls_doc_uri WHERE doc_count = lt_components-doc_count.
+      lv_doc_url = ls_doc_uri-uri.
+      EXIT .
+    ENDLOOP.
+    EXIT .
+  ENDLOOP.
+*  READ TABLE lt_doc_uris INTO ls_doc_uri INDEX p_file.
+*  lv_doc_url = ls_doc_uri-uri.
+
+  CALL METHOD lo_document_proxy->open_document
+    EXPORTING
+      document_url  = lv_doc_url
+      open_inplace  = uv_inplace
+      open_readonly = ''
+    IMPORTING
+      error         = lo_error.
+
+  TYPE-POOLS cntl .
+*  BREAK MVMaksimovsk .
+  DATA : cntl_handle TYPE cntl_handle .
+* OLE2 Handle
+  lo_document_proxy->get_document_handle(
+    EXPORTING
+      no_flush = 'X'
+    IMPORTING
+      handle   = cntl_handle
+  ).
+* Application
+  GET PROPERTY
+    OF cntl_handle-obj 'Application' = ole2_application
+    no flush
+    queue-only.
+
+**  GET PROPERTY
+**    OF cntl_handle-obj 'Workbook' = ole2_activeworkbook
+**    no flush
+**    queue-only .
+
+* Подавить вывод сообщений от Excel
+  SET PROPERTY
+    OF ole2_application 'DisplayAlerts' = 0
+    no flush
+    queue-only.
+* Скрыть
+*  IF visible IS INITIAL.
+  SET PROPERTY
+    OF ole2_application 'Visible' = 0
+    no flush
+    queue-only.
+*  ENDIF.
+
+
+* Activesheet
+  GET PROPERTY
+    OF ole2_application 'Activesheet' = ole2_activesheet
+    no flush
+    queue-only.
+****
+  IF NOT lo_excel_iface IS INITIAL.
+    FREE lo_excel_iface.
+  ENDIF.
+
+  lo_document_proxy->get_spreadsheet_interface(
+    EXPORTING
+      no_flush        = 'X'
+    IMPORTING
+      sheet_interface = lo_excel_iface
+      error           = lo_error ).
+
+ENDFORM.                    "open_excel_doc_from_bds
+
+*&---------------------------------------------------------------------*
+*&      Form  init_excel_proxy
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->UV_INPLACE text
+*----------------------------------------------------------------------*
+FORM init_excel_proxy USING uv_inplace TYPE c
+                                   lo_docking_container TYPE REF TO cl_gui_docking_container
+                                   lo_control TYPE REF TO i_oi_container_control
+                                   lo_document_proxy TYPE REF TO i_oi_document_proxy
+                                   lo_excel_iface TYPE REF TO i_oi_spreadsheet
+                                   lo_error TYPE REF TO i_oi_error
+                                   lc_exceltype TYPE soi_document_type
+                                   lv_retcode TYPE soi_ret_string
+                                   .
+
+  DATA lv_repid TYPE sy-repid.
+  DATA lv_dynnr TYPE sy-dynnr.
+
+  lv_repid = sy-repid.
+  lv_dynnr = sy-dynnr.
+
+  c_oi_container_control_creator=>get_container_control(
+    IMPORTING
+      control = lo_control
+      error   = lo_error ).
+
+  CREATE OBJECT lo_docking_container
+    EXPORTING
+      repid     = lv_repid
+      dynnr     = lv_dynnr
+      side      = cl_gui_docking_container=>dock_at_bottom
+      extension = 0.
+
+  lo_control->init_control(
+  EXPORTING
+    r3_application_name = ' '
+    inplace_enabled     = uv_inplace
+    parent              = lo_docking_container
+  IMPORTING
+    error               = lo_error ).
+
+  lo_control->get_document_proxy(
+    EXPORTING
+      document_type  = lc_exceltype
+    IMPORTING
+      document_proxy = lo_document_proxy ).
+ENDFORM.                    " init_excel_iface
+
+*&---------------------------------------------------------------------*
+*&      Form  insert_cell_xls
+*&---------------------------------------------------------------------*
+FORM insert_cell_xls USING: row TYPE soi_range_item-rows
+                  column TYPE soi_range_item-columns
+                  value "TYPE soi_generic_item-value
+                  name TYPE soi_range_item-name
+                  top TYPE i
+                  left TYPE i
+                  lo_docking_container TYPE REF TO cl_gui_docking_container
+                  lo_control TYPE REF TO i_oi_container_control
+                  lo_document_proxy TYPE REF TO i_oi_document_proxy
+                  lo_excel_iface TYPE REF TO i_oi_spreadsheet
+                  lo_error TYPE REF TO i_oi_error
+                  lc_exceltype TYPE soi_document_type
+                  lv_retcode TYPE soi_ret_string
+                  .
+
+  DATA: lt_range TYPE soi_range_list
+       , lt_content TYPE soi_generic_table
+       , rangeitem TYPE soi_range_item
+       , contentitem TYPE soi_generic_item
+       .
+
+  rangeitem-name = name.
+  rangeitem-columns = column.
+  rangeitem-rows = row.
+  APPEND rangeitem TO lt_range.
+  contentitem-column = column.
+  contentitem-row = row.
+  contentitem-value = value.
+  APPEND contentitem TO lt_content.
+
+  lo_excel_iface->insert_range_dim(
+    EXPORTING
+      name     = name
+      top      = top
+      left     = left
+      rows     = 1
+      columns  = 1
+      no_flush = 'X'
+    IMPORTING
+      error    = lo_error
+      retcode  = lv_retcode ).
+
+  lo_excel_iface->set_ranges_data(
+    EXPORTING
+      no_flush = 'X'
+      ranges   = lt_range
+      contents = lt_content
+    IMPORTING
+      error    = lo_error
+      retcode  = lv_retcode ).
+ENDFORM.                    " INSERT_CELL_XLS
+
+*&---------------------------------------------------------------------*
+*&      Form  free_excel_obj
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+FORM free_excel_obj USING lo_docking_container TYPE REF TO cl_gui_docking_container
+                          lo_control TYPE REF TO i_oi_container_control
+                          lo_document_proxy TYPE REF TO i_oi_document_proxy
+                          lo_excel_iface TYPE REF TO i_oi_spreadsheet
+                          lo_error TYPE REF TO i_oi_error
+                          lc_exceltype TYPE soi_document_type
+                          lv_retcode TYPE soi_ret_string.
+  FREE lo_excel_iface.
+  FREE lo_document_proxy.
+  FREE lo_error.
+  FREE lo_docking_container.
+  FREE lo_control.
+  FREE OBJECT : ole2_activesheet, ole2_application .
+ENDFORM.                    " free_excel_obj
+
+
+*&---------------------------------------------------------------------*
+*&      Form  start_excel
+*&---------------------------------------------------------------------*
+FORM start_excel USING value(io_container) TYPE REF TO cl_gui_docking_container
+                       value(iv_inplace)   TYPE flag
+                       value(iv_docurl)    TYPE c
+                             i_newfile     TYPE clike       " 28003
+                 CHANGING co_control TYPE REF TO i_oi_container_control
+                          co_proxy   TYPE REF TO i_oi_document_proxy .
+  DEFINE append_vbs .
+    lt_script = &1 .
+    append lt_script .
+  END-OF-DEFINITION.
+
+  TYPES: ts_script TYPE text1024 .
+  DATA : lt_script TYPE STANDARD TABLE OF ts_script WITH HEADER LINE .
+  DATA : cntl_handle TYPE cntl_handle .
+  DATA lo_error  TYPE REF TO i_oi_error.
+  DATA : lo_scripts TYPE REF TO i_oi_script_collection .
+  DATA : lv_prev_row TYPE i .
+  DATA : lv_ind TYPE i .
+  DATA : lt_fields_table TYPE soi_fields_table .
+  DATA : BEGIN OF lt_down OCCURS 0
+       , invoice(1024)
+       , dog(1024)
+       , path1(255)
+       , path2(255)
+       , path3(255)
+       , path4(255)
+       , path5(255)
+       , path6(255)
+       , path7(255)
+       , path8(255)
+       , path9(255)
+       , path10(255)
+       , path11(255)
+       , path12(255)
+       , path13(255)
+       , path14(255)
+       , path15(255)
+       , path16(255)
+       , path17(255)
+       , path18(255)
+       , path19(255)
+       , path20(255)
+       , path21(255)
+       , path22(255)
+       , path23(255)
+       , path24(255)
+       , path25(255)
+       , path26(255)
+       , path27(255)
+       , path28(255)
+       , path29(255)
+       , path30(255)
+       , END OF lt_down
+       .
+  DATA : file_vba TYPE string .
+  DATA: vbe TYPE ole2_object .
+  DATA: proj TYPE ole2_object .
+  DATA: vbcomp TYPE ole2_object .
+  DATA: lo_sheet TYPE REF TO i_oi_spreadsheet .
+  DATA: lv_retcode TYPE soi_ret_string .
+  DATA: lv_rows    TYPE i
+      , lv_columns TYPE i .
+  DATA: lv_rc TYPE sy-subrc.
+*  BREAK MVMaksimovsk .
+*  control
+  c_oi_container_control_creator=>get_container_control(
+      IMPORTING
+       control = co_control
+       error   = lo_error ) .
+
+  CREATE OBJECT io_container
+   EXPORTING
+     repid     = sy-repid
+     dynnr     = sy-dynnr
+     side      = cl_gui_docking_container=>dock_at_bottom
+     extension = 0 .
+
+  co_control->init_control(
+   EXPORTING
+     inplace_enabled          = iv_inplace
+     inplace_resize_documents = 'X'
+     inplace_scroll_documents = 'X'
+     r3_application_name      = 'Excel report'
+     register_on_close_event  = 'X'
+     parent                   = io_container
+   IMPORTING
+     error                    = lo_error
+   EXCEPTIONS
+     javabeannotsupported     = 1
+     OTHERS                   = 2 ) .
+* Proxy
+  co_control->get_document_proxy(
+    EXPORTING
+      document_type      = 'Excel.Sheet'
+    IMPORTING
+      document_proxy     = co_proxy
+      error              = lo_error
+      retcode = lv_retcode ) .
+
+* Document
+  co_proxy->open_document(
+    EXPORTING
+      document_url     = iv_docurl
+      open_inplace     = ''
+      open_readonly    = ''
+    IMPORTING
+      error            = lo_error
+      retcode = lv_retcode ) .
+  IF lo_error->error_code = c_oi_errors=>ret_ok.
+*?Журнал
+  ELSE.
+*?Журнал
+  ENDIF.
+
+* OLE2 Handle
+  co_proxy->get_document_handle(
+    EXPORTING
+      no_flush = ''
+    IMPORTING
+      handle   = cntl_handle  ).
+** Application
+
+
+  GET PROPERTY
+    OF cntl_handle-obj 'Application' = application_upl
+    no flush queue-only.
+* Подавить вывод сообщений от Excel
+  SET PROPERTY
+    OF application_upl 'DisplayAlerts' = 0
+    no flush queue-only.
+* Скрыть
+  SET PROPERTY
+    OF application_upl 'Visible' = 0
+    no flush queue-only.
+
+  SORT gt_uploaded BY row_num .
+*Заполнние выгружаемой таблицы в цикле while заполняются пустые строки
+*для того чтобы не сбить построчную нумерацию в файле:
+*  BREAK MVMaksimovsk .
+  DATA : wa LIKE LINE OF gt_rinvoice .
+  LOOP AT gt_uploaded .
+    CLEAR gt_dog_found .
+    TRANSLATE  gt_uploaded-ndtnk USING '_/' .
+    READ TABLE gt_dog_found WITH KEY ndtnk = gt_uploaded-ndtnk
+                                     naim_prod = gt_uploaded-naim_prod .
+    CLEAR gt_rinvoice .
+    READ TABLE gt_rinvoice WITH KEY data_num_sch = gt_uploaded-data_num_sch
+                                    naim_prod = gt_uploaded-naim_prod .
+    ADD 1 TO lv_ind .
+    IF lv_prev_row < gt_uploaded-row_num .
+      WHILE lv_ind < gt_uploaded-row_num .
+        APPEND INITIAL LINE TO lt_down .
+        ADD 1 TO lv_ind .
+      ENDWHILE .
+      lv_ind = gt_uploaded-row_num .
+    ENDIF.
+    READ TABLE gt_rinvoice INTO wa WITH KEY row_id = gt_uploaded-row_num .
+    lt_down-invoice = gt_rinvoice-hyperpath .
+*    lt_down-path1 = wa-path+0(255) .
+*    lt_down-path2 = wa-path+255(255) .
+*    lt_down-path3 = wa-path+510(255) .
+*    lt_down-path4 = gt_rinvoice-path+765(255) .
+*{7770014713-00019910 srsapharova 10/08/2011 replace wa_path with wa_path2
+    lt_down-path1 = wa-path2+0(255)  .
+    lt_down-path2 = wa-path2+255(255) .
+    lt_down-path3 = wa-path2+510(255) .
+    lt_down-path4 = wa-path2+765(255) .
+    lt_down-path5 = wa-path2+1020(255) .
+    lt_down-path6 = wa-path2+1275(255) .
+    lt_down-path7 = wa-path2+1530(255) .
+    lt_down-path8 = wa-path2+1785(255) .
+    lt_down-path9 = wa-path2+2040(255) .
+    lt_down-path10 = wa-path2+2295(255) .
+    lt_down-path11 = wa-path2+2550(255) .
+    lt_down-path12 = wa-path2+2805(255) .
+    lt_down-path13 = wa-path2+3060(255) .
+    lt_down-path14 = wa-path2+3315(255) .
+    lt_down-path15 = wa-path2+3570(255) .
+    lt_down-path16 = wa-path2+3825(255) .
+    lt_down-path17 = wa-path2+4080(255) .
+    lt_down-path18 = wa-path2+4335(255) .
+    lt_down-path19 = wa-path2+4590(255) .
+    lt_down-path20 = wa-path2+4845(255) .
+    lt_down-path21 = wa-path2+5100(255) .
+    lt_down-path22 = wa-path2+5355(255) .
+    lt_down-path23 = wa-path2+5610(255) .
+    lt_down-path24 = wa-path2+5865(255) .
+    lt_down-path25 = wa-path2+6120(255) .
+    lt_down-path26 = wa-path2+6375(255) .
+    lt_down-path27 = wa-path2+6630(255) .
+    lt_down-path28 = wa-path2+6885(255) .
+    lt_down-path29 = wa-path2+7140(255) .
+    lt_down-path30 = wa-path2+7395(255) .
+*7770014713-00019910}
+
+    CONCATENATE '.' gt_dog_found-path INTO lt_down-dog .
+    APPEND  lt_down .
+    CLEAR lt_down .
+    lv_prev_row = gt_uploaded-row_num  .
+  ENDLOOP.
+
+  CALL FUNCTION 'DP_GET_FIELDS_FROM_TABLE'
+    TABLES
+      data   = lt_down[]
+      fields = lt_fields_table[].
+** Sheet
+  co_proxy->get_spreadsheet_interface(
+    EXPORTING
+      no_flush        = ''
+    IMPORTING
+      error           = lo_error
+      sheet_interface = lo_sheet
+      retcode         = lv_retcode ).
+  lv_rows = LINES( lt_down[] ).
+  lv_columns = LINES( lt_fields_table[] ).
+  append_vbs: 'Function LastUsedRow() As Long'
+             , 'Dim strAddress As String'
+             , 'strAddress = Application.ActiveSheet.UsedRange.Address'
+             , 'LastUsedRow = Int(Right(strAddress, Len(strAddress) - _'
+             , 'InStrRev(strAddress, "$")))'
+             , 'End Function'
+             , 'Function first_cell()'
+             , 'Range("A1").Select'
+             , 'End Function'
+*7770014713-00019910             , 'Sub Auto_Open()'
+             , 'Sub Ne_Auto_Open()'                       "7770014713-00019910
+             , 'Dim same_value As String'
+             , 'Dim Raddr As String'
+             , 'Dim Haddr As String'
+             , 'Dim i As Integer'
+             , 'i = 12'
+             , 'While i <= LastUsedRow()'
+             .
+*Договора
+  IF ch_dog IS NOT INITIAL .
+    append_vbs:   'Raddr = "AG" & i'
+                , 'Haddr = "AX" & i'
+                , 'Application.ActiveSheet.Range(Raddr).Select'
+                , 'Range(Raddr).Select'
+                , 'same_value = ActiveCell.Cells.Value'
+                , 'Application.ActiveSheet.Range(Haddr).Select'
+                , 'Range(Haddr).Select'
+                , 'ActiveSheet.Hyperlinks.Add Anchor:=Range(Raddr), Address:=ActiveCell.Cells.Value, TextToDisplay:=same_value'
+                .
+  ENDIF.
+*Счет-фактуры
+  append_vbs: 'Raddr = "I" & i'
+            , 'Haddr = "AW" & i'
+            , 'Application.ActiveSheet.Range(Raddr).Select'
+            , 'Range(Raddr).Select'
+            , 'same_value = ActiveCell.Cells.Value'
+            , 'Application.ActiveSheet.Range(Haddr).Select'
+            , 'Range(Haddr).Select'
+            , 'ActiveSheet.Hyperlinks.Add Anchor:=Range(Raddr), Address:=ActiveCell.Cells.Value, TextToDisplay:=same_value' .
+
+  append_vbs:  'i = i + 1'
+              , 'Wend' .
+  append_vbs: 'first_cell'
+             , 'End Sub'
+             .
+  DATA: lv_cnt TYPE i VALUE 50 .
+*  do 30 times.
+  ADD 1 TO lv_cnt .
+  PERFORM insert_cell_xls USING '1' '1' '&' 'headline' 1 lv_cnt
+                                  io_container
+                                  co_control
+                                  co_proxy
+                                  lo_sheet
+                                  lo_error
+                                  'Excel.Sheet'
+                                  lv_retcode .
+*  enddo.
+  lo_sheet->insert_range_dim(
+    EXPORTING
+      no_flush  = 'X'
+      name      = 'UT'
+      left      = 49
+      top       = 12
+      rows      = lv_rows
+      columns   = lv_columns
+    IMPORTING
+      error     = lo_error ) .
+**Флаш всех предыдущих комманд
+  cl_gui_cfw=>flush( ).
+** Format
+  lo_sheet->insert_one_table(
+    EXPORTING
+      data_table   = lt_down[]
+      fields_table = lt_fields_table
+      rangename    = 'UT'
+      wholetable   = ''
+      no_flush     = ''
+    IMPORTING
+      error        = lo_error ) .
+*  DATA: rc(256) .
+*  co_proxy->get_script_collection(
+* EXPORTING
+*   no_flush = 'X'
+* IMPORTING
+*      scripts  = lo_scripts ) .
+*  lo_scripts->add_script_from_table(
+*   EXPORTING
+*     NO_FLUSH = ''
+*     script_name  = 'Macr'
+*     script_table = lt_script[]
+*     script_type  = lo_scripts->script_type_vbscript
+*     IMPORTING
+*     ERROR = lo_error
+*     retcode = rc
+*     )  .
+
+*  co_proxy->EXECUTE_MACRO(
+*  EXPORTING
+*      MACRO_STRING = 'Module1.Macr'
+*      SCRIPT_NAME = 'Macr'
+*      NO_FLUSH = ''
+*      param_count  = 1
+*      param1       = CNTL_HANDLE-obj
+*      IMPORTING error = lo_error ) .
+
+*Путь к текстовому файлу с макросом который будет применен к обновляемому xls  файлу
+  CONCATENATE pa_fout1  '\macro_file.txt' INTO file_vba .
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+      filename = file_vba
+    TABLES
+      data_tab = lt_script[].
+  GET PROPERTY OF application_upl 'VBE' = vbe .
+  GET PROPERTY OF vbe 'ActiveVBProject' = proj .
+  GET PROPERTY OF proj 'VBComponents' = vbcomp .
+  CALL METHOD OF vbcomp 'Import'
+    EXPORTING
+    #1 = file_vba. "Импортирую макрос
+*{ commented by srsapharova 10/08/2011
+*  CALL METHOD OF application_upl 'Run' EXPORTING #1 = 'Auto_Open'. "Запускаю макрос
+*}
+
+
+*  co_proxy->close_document( EXPORTING do_save = 'X' NO_FLUSH = 'X'). как то криво работает, сохраняет в template
+*  co_proxy->close_document( EXPORTING NO_FLUSH = 'X').
+*  Sub SaveAs(Filename As String, [FileFormat], [Password], [WriteResPassword]
+*  , [ReadOnlyRecommended], [CreateBackup], [AddToMru], [TextCodepage], [TextVisualLayout], [Local])
+
+*  CALL METHOD OF application_upl 'SaveAs' EXPORTING #1 = iv_docurl .
+
+
+
+  FREE OBJECT: application_upl, vbe, proj, vbcomp .
+*   BREAK-POINT .
+
+  CALL METHOD co_proxy->save_as
+    EXPORTING
+*{28003
+*      file_name   = iv_docurl
+       file_name   = i_newfile
+*}28003
+*       NO_FLUSH    = ' '
+*       PROMPT_USER = ' '
+    IMPORTING
+       error       = lo_error
+       retcode     = lv_retcode
+      .
+
+* co_proxy->save_document_to_url(
+*    EXPORTING
+*      url           =  iv_docurl
+*    IMPORTING
+*      error       = lo_error
+*      retcode = lv_retcode ) .
+
+
+
+  cl_gui_cfw=>flush( ).
+
+  "txt файл нам больше не нужен
+  CALL METHOD cl_gui_frontend_services=>file_delete
+    EXPORTING
+      filename             = file_vba
+    CHANGING
+      rc                   = lv_rc
+    EXCEPTIONS
+      file_delete_failed   = 1
+      cntl_error           = 2
+      error_no_gui         = 3
+      file_not_found       = 4
+      access_denied        = 5
+      unknown_error        = 6
+      not_supported_by_gui = 7
+      wrong_parameter      = 8
+      OTHERS               = 9.
+  IF sy-subrc <> 0.
+*      MESSAGE ID SY-MSGID TYPE SY-MSGTY NUMBER SY-MSGNO
+*                 WITH SY-MSGV1 SY-MSGV2 SY-MSGV3 SY-MSGV4.
+  ENDIF.
+ENDFORM .                    "start_excel
+
+*&---------------------------------------------------------------------*
+*&      Form  nar_new_filename
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->US_HEADER  text
+*      -->U_SRC_FILE text
+*      -->C_NAME     text
+*----------------------------------------------------------------------*
+FORM nar_new_filename USING    us_header  TYPE ts_header
+                               u_src_file TYPE clike
+                      CHANGING c_name     TYPE clike.
+
+  DATA: tokn1             TYPE string
+      , tokn_t            LIKE TABLE OF tokn1
+      , path1             TYPE string
+      .
+  DATA: l_folder TYPE string.
+
+  CLEAR: c_name.
+
+  SPLIT u_src_file AT `\` INTO TABLE tokn_t.
+  DESCRIBE TABLE tokn_t.
+  ASSERT sy-tfill GT 0.
+
+  DELETE tokn_t INDEX sy-tfill.
+
+  CALL METHOD zcletc_table=>intercalate
+    EXPORTING
+      delimiter = `\`
+      no_null   = ''
+      table     = tokn_t[]
+    IMPORTING
+      e_text    = l_folder.
+
+
+  PERFORM rename_file
+              USING
+                 us_header
+                 l_folder
+                 'НАРКнПкВР'(nar)
+              CHANGING
+                 c_name.
+
+ENDFORM.                    "nar_new_filename
+
+*&---------------------------------------------------------------------*
+*&      Form  get_zdoc_name
+*&---------------------------------------------------------------------*
+FORM get_zdoc_name  USING    p_bukrs
+                             p_cvd
+                             p_ndoc
+                    CHANGING p_doc_name
+                             p_ext.
+  DATA:
+    ls_doc TYPE zdoc,
+    ls_parent_doc TYPE zdoc,
+    l_cdnm LIKE zdctpt-cdnm,
+    l_parent_cdnm LIKE zdctpt-cdnm,
+    l_date TYPE char10,
+    l_parent_date TYPE char10,
+    l_docname TYPE zdoc-fulnm.
+
+*  получаем данные о документе
+  SELECT SINGLE *
+    FROM zdoc
+    INTO ls_doc
+    WHERE bukrs = p_bukrs AND
+          cvd = p_cvd AND
+          ndoc = p_ndoc.
+
+*  подтягиваем текст вида документа
+**//7770025154-00027704
+*- Убрать из наименований файлов договоров/связанных документов все пробелы
+*- Убрать все точки в датах
+*- Сами сокращенные имена брать zdctpt-cdnm_short
+**\\7770025154-00027704
+
+  SELECT SINGLE cdnm_short "cdnm
+    FROM zdctpt
+    INTO l_cdnm
+    WHERE cddc = ls_doc-cddc AND
+          spras = sy-langu.
+
+*  формируем наименование документа
+  IF ls_doc-ndcmn IS INITIAL.
+    WRITE ls_doc-dpodp TO l_date DD/MM/YYYY.
+**//7770025154-00027704
+    TRANSLATE l_date USING '. '.
+**\\7770025154-00027704
+
+    CONCATENATE l_cdnm
+                '№' ls_doc-ndtnk
+                'от' l_date
+           INTO p_doc_name
+           SEPARATED BY space.
+  ELSE.
+*    если имеем дело с подчиненным документом, то получаем данные об основном документе
+    SELECT SINGLE *
+      FROM zdoc
+      INTO ls_parent_doc
+      WHERE bukrs = p_bukrs AND
+            cvd = p_cvd AND
+            ndoc = ls_doc-ndcmn.
+
+*    подтягиваем текст вида документа
+    SELECT SINGLE cdnm_short "cdnm
+      FROM zdctpt
+      INTO l_parent_cdnm
+      WHERE cddc = ls_parent_doc-cddc AND
+            spras = sy-langu.
+
+    WRITE ls_doc-dpodp TO l_date DD/MM/YYYY.
+    WRITE ls_parent_doc-dpodp TO l_parent_date DD/MM/YYYY.
+
+*    получим имя договора ТНК
+    FIND ls_doc-ndtnk IN ls_doc-fulnm.
+    IF sy-subrc = 0.
+      l_docname = ls_doc-fulnm.
+    ELSE.
+      l_docname = ls_doc-ndtnk.
+    ENDIF.
+    IF sy-tcode <> 'ZVRD_REESTR_DOG'.
+**//7770025154-00027704
+      TRANSLATE: l_date USING '. ',
+                 l_parent_date USING '. '.
+**\\7770025154-00027704
+
+      CONCATENATE l_cdnm
+                  '№'  l_docname
+                  'от' l_date
+                  'к'  l_parent_cdnm
+                  '№'  ls_parent_doc-ndtnk
+                  'от' l_parent_date
+             INTO p_doc_name
+             SEPARATED BY space.
+    ELSE.
+      CONCATENATE l_cdnm
+                  '№'  l_docname
+                  'от' l_date
+             INTO p_doc_name
+             SEPARATED BY space.
+    ENDIF.
+  ENDIF.
+
+***//7770025154-00027704
+  IF sy-tcode <> 'ZVRD_REESTR_DOG'.
+    CONDENSE p_doc_name NO-GAPS.
+  ENDIF.
+***\\7770025154-00027704
+
+*   Расширение
+  CLEAR p_ext.
+
+  IF p_bukrs IS INITIAL.
+    SELECT SINGLE ext INTO p_ext FROM zdoclist WHERE cvd = p_cvd
+                                                 AND ndoc = p_ndoc.
+  ELSE.
+    SELECT SINGLE ext INTO p_ext FROM zdoclist WHERE bukrs = p_bukrs
+                                                 AND cvd = p_cvd
+                                                 AND ndoc = p_ndoc.
+  ENDIF.
+
+  IF p_ext EQ space.
+    p_ext = 'tif'.
+  ENDIF.
+
+ENDFORM.                    " get_zdoc_name
+*&---------------------------------------------------------------------*
+*&      Form  FILL_EMPTY_PATH
+*&---------------------------------------------------------------------*
+FORM fill_empty_path .
+  LOOP AT gt_rinvoice WHERE path IS INITIAL .
+    IF sy-tcode NE 'ZVRD_REESTR_DOG'.
+      CONCATENATE '&#Книга покупок#Первичные документы#' gt_rinvoice-naim_prod '#'
+                   gt_rinvoice-ndtnk '#' gt_rinvoice-data_num_sch '##&' INTO gt_rinvoice-path .
+    ELSE.
+*(7770014713-00020329 AMKRYLOVA mod+
+      CONCATENATE '&#Первичные документы#' gt_rinvoice-naim_prod '#'
+                   gt_rinvoice-ndtnk '#' gt_rinvoice-data_num_sch '##&' INTO gt_rinvoice-path .
+    ENDIF.
+  ENDLOOP.
+ENDFORM.                    " FILL_EMPTY_PATH
+*&---------------------------------------------------------------------*
+*&      Form  PROGRESS_INDICATOR
+*&---------------------------------------------------------------------*
+FORM progress_indicator USING p_perc p_text .
+  CALL FUNCTION 'SAPGUI_PROGRESS_INDICATOR'
+    EXPORTING
+      percentage = p_perc
+      text       = p_text.
+*  MESSAGE p_text TYPE 'S' .
+ENDFORM.                    " PROGRESS_INDICATOR
+*&---------------------------------------------------------------------*
+*&      Form  MESSAGE_END
+*&---------------------------------------------------------------------*
+FORM message_end .
+  MESSAGE 'Выгрузка и обновление завершены' TYPE 'S' .
+ENDFORM.                    " MESSAGE_END
+*&---------------------------------------------------------------------*
+*&      Form  CORRECT_LENGTH
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_GT_UPLOADED_NAIM_PROD  text
+*----------------------------------------------------------------------*
+FORM correct_length  USING    i_belnr  TYPE belnr_d
+                              i_bukrs  TYPE bukrs
+                              i_gjahr  TYPE gjahr
+         p_naim_prod TYPE char255.
+  DATA: l_length TYPE sy-tabix,
+        lt_lifnr TYPE TABLE OF lifnr,
+        l_lifnr TYPE lifnr.
+
+  l_length = STRLEN( p_naim_prod ) .
+
+  CHECK l_length > 30.
+
+  SELECT lifnr FROM bseg
+      INTO TABLE lt_lifnr
+      WHERE bukrs = i_bukrs
+        AND belnr = i_belnr
+        AND gjahr = i_gjahr.
+  DELETE lt_lifnr WHERE table_line = space.
+
+  READ TABLE lt_lifnr INTO l_lifnr INDEX 1.
+
+  IF l_lifnr IS INITIAL.
+    CONCATENATE  p_naim_prod(30) '_' i_belnr INTO p_naim_prod.
+  ELSE.
+    CONCATENATE  p_naim_prod(30) '_' l_lifnr INTO p_naim_prod.
+  ENDIF.
+
+ENDFORM.                    " CORRECT_LENGTH
+*&---------------------------------------------------------------------*
+*&      Form  CALL_LOAD
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*  -->  p1        text
+*  <--  p2        text
+*----------------------------------------------------------------------*
+FORM call_load .
+*(7770014713-00020329 AMKRYLOVA mod+
+  CHECK sy-ucomm = 'LOTUS'.
+  CLEAR sy-ucomm .
+  SUBMIT zvrd_reestr_dog_re
+  WITH p_tcode = sy-tcode
+  VIA SELECTION-SCREEN
+  AND RETURN.
+*)7770014713-00020329 AMKRYLOVA mod+
+ENDFORM.                    " CALL_LOAD
+*&---------------------------------------------------------------------*
+*&      Form  FIND_CORR
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_LT_BKPF  text
+*----------------------------------------------------------------------*
+FORM find_corr  USING  us_bkpf TYPE t_bkpf.
+
+  TYPES: BEGIN OF ty_corr,
+         belnr TYPE bkpf-belnr,
+         gjahr TYPE bkpf-gjahr,
+         END OF ty_corr.
+
+  DATA : lt_link LIKE TABLE OF gt_link,
+         lt_corr TYPE TABLE OF ty_corr,
+         l_bktxt TYPE bkpf-bktxt.
+
+  FIELD-SYMBOLS: <fs_corr> TYPE ty_corr,
+                 <fs_link> LIKE LINE OF lt_link.
+
+  FREE: lt_link, lt_corr, l_bktxt.
+
+  CONCATENATE us_bkpf-belnr us_bkpf-gjahr INTO l_bktxt.
+  CONDENSE l_bktxt NO-GAPS.
+
+  SELECT belnr gjahr INTO TABLE lt_corr
+    FROM bkpf WHERE bukrs = us_bkpf-bukrs
+                AND blart IN ('IC', 'CF')
+                AND bktxt = l_bktxt.
+
+*найденное добавляем в таблицу LT_LINK
+  LOOP AT lt_corr ASSIGNING <fs_corr>.
+    APPEND INITIAL LINE TO lt_link ASSIGNING <fs_link>.
+    <fs_link>-z_belnr = <fs_corr>-belnr .
+    <fs_link>-z_gjahr = <fs_corr>-gjahr .
+    <fs_link>-bukrs = us_bkpf-bukrs .
+    <fs_link>-belnr = us_bkpf-belnr .
+    <fs_link>-gjahr = us_bkpf-gjahr .
+    <fs_link>-z_type = 'FI' .
+  ENDLOOP.
+
+  PERFORM get_urls TABLES lt_link USING 'FI'.
+
+ENDFORM.                    " FIND_CORR
+*&---------------------------------------------------------------------*
+*&      Form  CHANGE_COL_NEW
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_<LS_XLS>_COL  text
+*      <--P_LV_COL  text
+*----------------------------------------------------------------------*
+FORM change_col_new USING    p_xls_col
+                    CHANGING p_col.
+
+  CASE p_xls_col.
+    WHEN  1 OR 2 OR 3 .
+      MOVE p_xls_col TO p_col .
+    WHEN  8 .
+      MOVE 4 TO p_col .
+    WHEN 14 .
+      MOVE 5 TO p_col .
+    WHEN 28 .
+      MOVE 6 TO p_col .
+    WHEN 35 .
+      MOVE 7 TO p_col .
+    WHEN 48 .
+      MOVE 8 TO p_col .
+    WHEN 49 .
+      MOVE 9 TO p_col .
+**//7770025154-00027704
+    WHEN 15.
+      MOVE 10 TO p_col.
+**\\7770025154-00027704
+    WHEN 7.
+      MOVE 12 TO p_col.
+  ENDCASE.
+
+
+ENDFORM.                    " CHANGE_COL_NEW
+*&---------------------------------------------------------------------*
+*&      Form  CHANGE_COL_NEW_2014
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_<LS_XLS>_COL  text
+*      <--P_LV_COL  text
+*----------------------------------------------------------------------*
+FORM change_col_new_2014 USING    p_xls_col
+                         CHANGING p_col.
+
+  CASE p_xls_col.
+    WHEN  1 OR 2 OR 3 .
+      MOVE p_xls_col TO p_col .
+    WHEN  9 .
+      MOVE 4 TO p_col .
+    WHEN 15 .
+      MOVE 5 TO p_col .
+    WHEN 16 .
+      MOVE 10 TO p_col .
+    WHEN 24 .
+      MOVE 6 TO p_col .
+    WHEN 31 .
+      MOVE 7 TO p_col .
+    WHEN 50 .
+      MOVE 8 TO p_col .
+    WHEN 51 .
+      MOVE 9 TO p_col .
+    WHEN 7.
+      MOVE 12 TO p_col.
+  ENDCASE.
+
+
+ENDFORM.                    " CHANGE_COL_NEW_2014
+*&---------------------------------------------------------------------*
+*&      Form  CORR_INN
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->P_LT_DOG_FOUND  text
+*----------------------------------------------------------------------*
+FORM corr_inn  TABLES pt_dog_found STRUCTURE gt_dog_found .
+
+  TYPES: BEGIN OF ty_inn,
+         bukrs TYPE zkrek-bukrs,
+         cvd   TYPE zkrek-cvd,
+         ndoc  TYPE zkrek-ndoc,
+         stcd1 TYPE kna1-stcd1,
+         END OF ty_inn.
+
+  DATA: lt_inn TYPE SORTED TABLE OF ty_inn WITH NON-UNIQUE KEY bukrs cvd ndoc.
+  FIELD-SYMBOLS: <fs_inn> TYPE ty_inn,
+                 <fs_dog> LIKE LINE OF pt_dog_found.
+
+  CHECK pt_dog_found[] IS NOT INITIAL.
+
+  SELECT zkrek~bukrs
+         zkrek~cvd
+         zkrek~ndoc
+         lfa1~stcd1 INTO TABLE lt_inn
+    FROM zkrek JOIN lfa1 ON lfa1~lifnr = zkrek~cdktr
+      FOR ALL entries IN pt_dog_found WHERE zkrek~bukrs = pt_dog_found-bukrs
+                                        AND zkrek~cvd = pt_dog_found-cvd
+                                        AND zkrek~ndoc = pt_dog_found-ndoc
+                                        AND zkrek~ktype = 'K'.
+
+  SELECT zkrek~bukrs
+         zkrek~cvd
+         zkrek~ndoc
+         kna1~stcd1 APPENDING TABLE lt_inn
+    FROM zkrek JOIN kna1 ON kna1~lifnr = zkrek~cdktr
+      FOR ALL entries IN pt_dog_found WHERE zkrek~bukrs = pt_dog_found-bukrs
+                                        AND zkrek~cvd = pt_dog_found-cvd
+                                        AND zkrek~ndoc = pt_dog_found-ndoc
+                                        AND zkrek~ktype <> 'K'.
+  LOOP AT pt_dog_found ASSIGNING <fs_dog>.
+    READ TABLE lt_inn ASSIGNING <fs_inn> WITH KEY bukrs = pt_dog_found-bukrs
+                                                  cvd = pt_dog_found-cvd
+                                                  ndoc = pt_dog_found-ndoc.
+    IF sy-subrc = 0.
+      <fs_dog>-inn = <fs_inn>-stcd1.
+    ENDIF.
+  ENDLOOP.
+
+*  IF <fs_dog>-inn IS INITIAL OR <fs_dog>-inn CN '0123456789 '.
+*    <fs_dog>-inn = <fs_dog>-naim_prod.
+*  ENDIF.
+
+
+ENDFORM.                    " CORR_INN
+
+*&---------------------------------------------------------------------*
+*&      Form  get_xls_header
+*&---------------------------------------------------------------------*
+*       28001
+*----------------------------------------------------------------------*
+*      -->U_FILE     text
+*      -->CS_HEADER  text
+*----------------------------------------------------------------------*
+FORM get_xls_header USING    u_file    TYPE clike
+                    CHANGING cs_header TYPE ts_header.
+  DATA:
+    lo_xls TYPE REF TO lcl_xls.
+
+  DATA:
+    l_period TYPE char1024.
+
+
+  CREATE OBJECT lo_xls.
+  lo_xls->open_file( u_file ).
+
+  lo_xls->flush( ).
+
+  lo_xls->get_range_value(
+    EXPORTING i_range = 'PERIOD'
+    IMPORTING e_value = l_period ).
+
+  PERFORM del_alphabet
+              CHANGING
+                 l_period.
+
+  IF l_period(10) NE space.
+    CALL FUNCTION 'CONVERT_DATE_TO_INTERNAL'
+      EXPORTING
+        date_external            = l_period(10)
+      IMPORTING
+        date_internal            = cs_header-begda
+      EXCEPTIONS
+        date_external_is_invalid = 1
+        OTHERS                   = 2.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+  ENDIF.
+
+  IF l_period+10(10) NE space.
+    CALL FUNCTION 'CONVERT_DATE_TO_INTERNAL'
+      EXPORTING
+        date_external            = l_period+10(10)
+      IMPORTING
+        date_internal            = cs_header-endda
+      EXCEPTIONS
+        date_external_is_invalid = 1
+        OTHERS                   = 2.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+              WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+  ENDIF.
+
+  lo_xls->close_file( ).
+  lo_xls->free( ).
+
+ENDFORM.                    "get_xls_header
+
+*&---------------------------------------------------------------------*
+*&      Form  del_alphabet
+*&---------------------------------------------------------------------*
+*       28001
+*----------------------------------------------------------------------*
+*      -->C_CHARS    text
+*----------------------------------------------------------------------*
+FORM del_alphabet CHANGING c_chars TYPE clike.
+  DATA:
+    l_len TYPE i,
+    l_pos TYPE i.
+
+  DO.
+    l_len = STRLEN( c_chars+l_pos ).
+    IF l_len = 0.
+      EXIT.
+    ENDIF.
+
+    IF c_chars+l_pos(1) NA '0123456789.'.
+      SHIFT c_chars+l_pos LEFT BY 1 PLACES.
+    ELSE.
+      ADD 1 TO l_pos.
+    ENDIF.
+  ENDDO.
+
+ENDFORM.                    "del_alphabet
+
+*&---------------------------------------------------------------------*
+*&      Form  rename_file
+*&---------------------------------------------------------------------*
+*       text
+*----------------------------------------------------------------------*
+*      -->US_HEADER  text
+*      -->U_FOLDER   text
+*      -->U_REESTR   text
+*      -->C_NAME     text
+*----------------------------------------------------------------------*
+FORM rename_file USING    us_header TYPE ts_header
+                          u_folder  TYPE clike
+                          u_reestr  TYPE clike
+                 CHANGING c_name    TYPE clike.
+  DATA:
+    lo_buk TYPE REF TO lcl_buk.
+
+  DATA:
+    l_inn    TYPE t001z-paval,
+    l_name   TYPE t001z-paval,
+    l_quart  TYPE ztetctaxperiod-vperiod.
+
+
+  CLEAR: c_name.
+
+* данные БЕ
+  lo_buk = lcl_buk=>get_instance( us_header-bukrs ).
+
+  l_inn   = lo_buk->get_inn( ).
+  l_name  = lo_buk->get_name( ).
+  l_name  = zcletc_text=>get_foldername_adapt( l_name ).
+
+  CLEAR: l_quart.
+  SELECT SINGLE vperiod
+    INTO l_quart
+    FROM ztetctaxperiod
+    WHERE pervo <= us_header-endda+4(2)
+      AND perbi >= us_header-endda+4(2).
+  CHECK sy-subrc = sy-subrc. " don't care RC
+
+  CONCATENATE
+    l_inn
+    '_'
+    l_name
+    '_'
+    'НД0НДС'(nds)
+    '_'
+    l_quart
+    us_header-endda(4)
+    '_'
+    u_reestr
+  INTO c_name.
+
+  CONCATENATE u_folder `\` c_name '.xls' INTO c_name.       "#EC NOTEXT
+
+ENDFORM.                    " PREP_FILENAME
