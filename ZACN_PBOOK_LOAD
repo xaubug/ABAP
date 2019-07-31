@@ -1,0 +1,33 @@
+*&---------------------------------------------------------------------*
+*& Report  ZACN_PBOOK_LOAD                                             *
+*&---------------------------------------------------------------------*
+REPORT  ZACN_PBOOK_LOAD .
+INCLUDE ZACN_PBOOK_LOAD_DATA .
+INCLUDE ZACN_PBOOK_LOAD_SCR .
+INCLUDE ZACN_PBOOK_LOAD_FORM .
+
+INITIALIZATION.
+*(7770014713-00020329 AMKRYLOVA mod+
+if sy-tcode eq 'ZVRD_REESTR_DOG'.
+ set titlebar 'ZRD'.
+endif.
+*)7770014713-00020329 AMKRYLOVA mod+
+
+START-OF-SELECTION .
+  PERFORM check_out_files .
+  PERFORM get_excel_data .
+  PERFORM select_data .
+
+END-OF-SELECTION .
+  PERFORM create_folders .                                           " Создание папок
+  PERFORM tiff_dog_upload .                                          "Загрузка tif образов
+  if sy-tcode ne 'ZVRD_REESTR_DOG'."7770014713-00020329 AMKRYLOVA mod+
+    PERFORM export_to_excel USING 'ZACN_PBOOK' 'rinvoice.xls' 'Реестр фактур' .
+    PERFORM export_to_excel USING 'ZACN_PBOOK' 'rdogs.xls' 'Реестр договоров'.
+    PERFORM update_excel . "Обновление входного файла
+*(7770014713-00020329 AMKRYLOVA mod+
+  else.
+    PERFORM export_to_excel USING 'ZVRD_FORM2' 'reestr_contrs_new.xls' 'Реестр договоров Экспорт'.
+  endif.
+*)"7770014713-00020329 AMKRYLOVA mod+
+  PERFORM message_end .
