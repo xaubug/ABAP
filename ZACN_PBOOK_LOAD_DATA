@@ -1,0 +1,141 @@
+*&---------------------------------------------------------------------*
+*&  Include           ZACN_PBOOK_LOAD_DATA                             *
+*&---------------------------------------------------------------------*
+TABLES: zdoc .
+TYPE-POOLS: ABAP .
+TYPE-POOLS: SBDST .
+TYPE-POOLS: OLE2 .
+TYPES: BEGIN OF t_uploaded
+     , bukrs TYPE bkpf-bukrs "
+     , belnr LIKE bkpf-belnr "
+     , gjahr LIKE bkpf-gjahr "
+     , data_num_sch(255) "
+     , naim_prod(255) "
+     , gsber LIKE bseg-gsber "
+     , ndtnk LIKE zdoc-ndtnk "
+     , invoice TYPE string "8
+     , dog TYPE string "9
+     , inn(255) "10 "7770025154-00027704
+     , row_num TYPE i "
+     , npp TYPE string     " Номер по п/п.
+     , END OF t_uploaded
+     .
+TYPES: BEGIN OF t_bkpf
+     , bukrs LIKE bkpf-bukrs
+     , belnr LIKE bkpf-belnr
+     , gjahr LIKE bkpf-gjahr
+     , blart LIKE bkpf-blart
+     , bldat LIKE bkpf-bldat
+     , budat LIKE bkpf-budat
+     , xblnr LIKE bkpf-xblnr
+     , bktxt LIKE bkpf-bktxt
+     , waers LIKE bkpf-waers
+     , awtyp LIKE bkpf-awtyp
+     , awkey LIKE bkpf-awkey
+     , naim_prod(255)
+     , z_lotus_key(5000)
+     , path TYPE string
+     , END OF t_bkpf
+     .
+TYPES: BEGIN OF t_url
+     , urlid LIKE ZTFIN_URL_RELS-urlid
+     , bukrs LIKE ZTFIN_URL_RELS-bukrs_fi
+     , belnr LIKE ZTFIN_URL_RELS-belnr_fi
+     , gjahr LIKE ZTFIN_URL_RELS-gjahr_fi
+     , END OF t_url
+     .
+TYPES: t_urlt TYPE TABLE OF t_url .
+
+TYPES:  BEGIN OF t_dog_tnk .
+INCLUDE TYPE t_uploaded .
+TYPES: z_dpodp LIKE zdoc-dpodp .
+TYPES : END OF t_dog_tnk .
+
+TYPES: BEGIN OF t_cvd
+     , CVD TYPE ZCVDD-CVD
+     , GSBER TYPE ZCVDD-GSBER
+     , bukrs TYPE ZCVDD-bukrs
+     , END OF t_cvd
+     .
+
+TYPES: BEGIN OF t_keys
+    , ndoc TYPE Zdoc-ndoc
+    , CVD TYPE ZCVDD-CVD
+    , page_numb TYPE i
+    , END OF t_keys
+    .
+DATA : gt_keys TYPE STANDARD TABLE OF t_keys WITH HEADER LINE.
+TYPES: t_keyst TYPE t_keys .
+TYPES: t_cvdt TYPE TABLE OF t_cvd .
+TYPES: BEGIN OF t_dog_found
+     , BUKRS TYPE zdoc-bukrs
+     , ndtnk TYPE zdoc-ndtnk
+     , naim_prod(255)
+     , GSBER TYPE zcvdd-gsber
+     , Z_LOTUS_KEY(5000)
+     , NDOC TYPE zdoc-NDOC
+     , CVD TYPE zcvdd-cvd
+     , DPODP TYPE zdoc-DPODP
+     , DPODP_str(10)
+     , path TYPE string
+     , hyperpath(255)
+     , keys LIKE gt_keys[]
+     , inn(255) "10 "7770025154-00027704
+     , END OF t_dog_found
+     .
+DATA : gt_uploaded TYPE STANDARD TABLE OF t_uploaded WITH HEADER LINE .
+DATA : gt_dog_found TYPE STANDARD TABLE OF t_dog_found WITH HEADER LINE .
+DATA : gt_dog_found_v2 TYPE STANDARD TABLE OF t_dog_found WITH HEADER LINE .
+DATA : BEGIN OF gt_link OCCURS 0
+     , z_belnr LIKE bkpf-belnr "1
+     , z_gjahr LIKE bkpf-gjahr "2
+     , bukrs LIKE bkpf-bukrs   "3
+     , belnr LIKE bkpf-belnr   "4
+     , gjahr LIKE bkpf-gjahr   "5
+     , z_type(2)               "6
+     , z_lotus_link LIKE ZTFIN_URL-url "7
+     , urlid LIKE ZTFIN_URL-urlid "8
+     , z_lotus_key TYPE string "9
+     , invoice TYPE string     "10
+     , dog TYPE string         "11
+     , END OF gt_link
+     .
+DATA : gv_subrc TYPE sy-subrc .
+DATA : BEGIN OF gt_rinvoice OCCURS 0
+     , counter TYPE i
+     , DATA_NUM_SCH(255)
+     , naim_prod(255)
+     , ndtnk TYPE zdoc-ndtnk
+     , path(9999)
+     , path2(9999)
+     , hyperpath(255)
+     , DATA_NUM_SCH2(255)
+     , naim_prod2(255)
+     , row_id TYPE i
+     , END OF gt_rinvoice
+     .
+DATA: gv_gsbers(256) .
+DATA : ole2_application TYPE OLE2_OBJECT .
+DATA : ole2_activesheet TYPE OLE2_OBJECT .
+*DATA : ole2_activeworkbook TYPE OLE2_OBJECT .
+DATA : application_upl TYPE OLE2_OBJECT .
+TABLES: ZTOST_BALANCE.
+
+*{ 28001
+TYPES:
+  BEGIN OF ts_header,
+    bukrs  TYPE t001-bukrs,
+    begda  TYPE sy-datum,
+    endda  TYPE sy-datum,
+  END   OF ts_header.
+
+DATA:
+  gs_header TYPE ts_header.
+*} 28001
+
+
+
+*{ 28001
+INCLUDE zcmn_excel_tools_1.
+INCLUDE zcmn_buk_dao.
+*} 28001
