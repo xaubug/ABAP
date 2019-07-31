@@ -1,0 +1,61 @@
+*&---------------------------------------------------------------------*
+*&  Include           ZACN_PBOOK_LOAD_SCR                              *
+*&---------------------------------------------------------------------*
+PARAMETERS: pa_file TYPE rlgrap-filename . "DEFAULT 'C:\Documents and Settings\MVMaksimovskiy\Desktop\999.xlsx'.
+SELECTION-SCREEN: SKIP .
+SELECT-OPTIONS: so_per for ZTOST_BALANCE-zperiod no-extension modif id DOG."7770014713-00020329 AMKRYLOVA mod+
+PARAMETERS: ch_rel AS CHECKBOX  .
+PARAMETERS: ch_dog AS CHECKBOX USER-COMMAND U_DOG .
+PARAMETERS: ch_other AS CHECKBOX USER-COMMAND U_OTH.
+PARAMETERS: pa_fout1 TYPE rlgrap-filename MODIF ID F1.
+PARAMETERS: pa_fout2 TYPE rlgrap-filename MODIF ID F2.
+SELECT-OPTIONS : so_dpodp FOR zdoc-dpodp MODIF ID dat.
+
+**//7770020486-00022476
+parameters p_old as CHECKBOX DEFAULT ''.
+**\\7770020486-00022476
+
+*(7770014713-00020329 AMKRYLOVA mod+
+INITIALIZATION.
+  SET PF-STATUS '1000' .
+  if sy-tcode eq 'ZVRD_REESTR_DOG'.
+    ch_dog = 'X'.
+  endif.
+
+AT SELECTION-SCREEN ON EXIT-COMMAND .
+  PERFORM call_load .
+*)7770014713-00020329 AMKRYLOVA mod+
+AT SELECTION-SCREEN .
+  IF ch_other IS INITIAL.
+    CLEAR: pa_fout1, pa_fout2 .
+  ENDIF.
+  CHECK ( sy-ucomm NE 'U_OTH' AND sy-ucomm NE 'U_DOG').
+  PERFORM check_file_exists CHANGING pa_file .
+  PERFORM check_file_extension CHANGING pa_file .
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR pa_file.
+  PERFORM set_file CHANGING pa_file .
+  PERFORM check_file_extension CHANGING pa_file .
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR pa_fout1 .
+  CHECK ch_other IS NOT INITIAL .
+  PERFORM browse_folder CHANGING pa_fout1 .
+* PERFORM check_path USING pa_fout1 CHANGING gv_subrc .
+
+AT SELECTION-SCREEN ON VALUE-REQUEST FOR pa_fout2 .
+  CHECK ch_other IS NOT INITIAL .
+  PERFORM browse_folder CHANGING pa_fout2 .
+* PERFORM check_path USING pa_fout2 CHANGING gv_subrc .
+
+AT SELECTION-SCREEN ON pa_fout1 .
+  CHECK ch_other IS NOT INITIAL .
+  CHECK pa_fout1  IS NOT INITIAL .
+  PERFORM check_path USING pa_fout1 CHANGING gv_subrc .
+
+AT SELECTION-SCREEN ON pa_fout2 .
+  CHECK ch_other IS NOT INITIAL .
+  CHECK pa_fout2  IS NOT INITIAL .
+  PERFORM check_path USING pa_fout2 CHANGING gv_subrc .
+
+AT SELECTION-SCREEN OUTPUT .
+  PERFORM modify_screen .
