@@ -1,0 +1,123 @@
+REPORT zmmv1.
+
+*----------------------------------------------------------------------*
+*       CLASS ZCL_CMN_CG DEFINITION
+*----------------------------------------------------------------------*
+CLASS zcl_cmn_cg DEFINITION.
+  PUBLIC SECTION.
+    CLASS-METHODS: exists IMPORTING prj TYPE char10
+                                    cg  TYPE char30
+                                    value TYPE any
+                          RETURNING value(return) TYPE char1
+                 , range IMPORTING prj TYPE char10
+                                   cg  TYPE char30
+                         RETURNING value(return) TYPE range_t_werks_d
+                 , get_list IMPORTING prj TYPE char10
+                                      cg  TYPE char30
+                             CHANGING list TYPE STANDARD TABLE
+                 , value IMPORTING prj TYPE char10
+                                   cg  TYPE char30
+                                   pos TYPE n "(6)
+                          RETURNING value(return) TYPE char1
+                 .
+ENDCLASS.                    "ZCL_CMN_CG DEFINITION
+
+*----------------------------------------------------------------------*
+*       CLASS zcl_cmn_cg IMPLEMENTATION
+*----------------------------------------------------------------------*
+*
+*----------------------------------------------------------------------*
+CLASS zcl_cmn_cg IMPLEMENTATION.
+  METHOD exists.
+* Здесь можно реализовать вариант с буферизацией
+*1) Ищем значения в буфере
+*2) Нет в буфере - читаем из базы весь FP.
+*3) Если нет в базе - кладём в буфер пустую строку
+*4) Есть - кладём найденную.
+* Без буферизации
+    DATA: l_value TYPE ztcmn_cnstgrpps-value.
+* Превращаем в CHAR
+    WRITE value TO l_value LEFT-JUSTIFIED.
+* Ищем
+    SELECT SINGLE value
+      FROM ztcmn_cnstgrpps
+      INTO l_value
+     WHERE prjct = prj
+       AND cngrp = cg
+       AND value = l_value.
+
+    IF sy-subrc = 0.
+      return = 'X'.
+    ELSE.
+*   Есть вообще такая группа?
+      ...
+      IF sy-subrc <> 0.
+*     EXCEPTION !!!!!!!!!!
+      ENDIF.
+    ENDIF.
+  ENDMETHOD.                    "EXISTS
+  METHOD range.
+    "   Пока вариант без буферизации
+    DATA: l_val TYPE ztcmn_cnstgrpps-value,
+          l_ret LIKE LINE OF return VALUE 'IEQ'.
+
+    SELECT value
+      FROM ztcmn_cnstgrpps
+      INTO l_ret-low
+     WHERE prjct = prj
+       AND cngrp = cg.
+
+      APPEND l_ret TO return.
+    ENDSELECT.
+    IF sy-subrc <> 0.
+*   Есть вообще такая группа?
+      ...
+      IF sy-subrc = 0.
+*     EXCEPTION !!!!!!!!!! - Нет значений в группе
+      ELSE.
+*     EXCEPTION !!!!!!!!!! - Нет группы
+      ENDIF.
+    ENDIF.
+  ENDMETHOD.                    "RANGE
+  METHOD get_list.
+* Здесь предполагается, что список уже типизирован
+* Просто наполняем его.
+* Пока вариант без буферизации
+    DATA: l_list TYPE TABLE OF ztcmn_cnstgrpps-value.
+    SELECT value
+      FROM ztcmn_cnstgrpps
+      INTO TABLE l_list
+     WHERE prjct = prj
+       AND cngrp = cg.
+    IF sy-subrc = 0.
+      list[] = l_list[].
+    ELSE.
+*   Есть вообще такая группа?
+      ...
+      IF sy-subrc = 0.
+*     EXCEPTION !!!!!!!!!! - Нет значений в группе
+      ELSE.
+*     EXCEPTION !!!!!!!!!! - Нет группы
+      ENDIF.
+    ENDIF.
+  ENDMETHOD.                    "GET_LIST
+  METHOD value.
+    SELECT SINGLE value
+     FROM ztcmn_cnstgrpps
+     INTO return
+    WHERE prjct = prj
+      AND cngrp = cg
+      AND posnr = pos.
+    IF sy-subrc <> 0.
+*   EXCEPTION !!!!!!!!!! - Нет такой позиции в группе
+    ENDIF.
+  ENDMETHOD.                    "VALUE
+ENDCLASS.                    "ZCL_CMN_CG
+
+START-OF-SELECTION.
+DATA gv_max_rows TYPE ztcmn_cnstgrpps-value.
+ gv_max_rows = zcl_cmn_cg=>value( prj = 'GFT'
+                                  cg  = 'IID-769'
+                                  pos = 1 ).
+
+ BREAK-POINT.
